@@ -19,6 +19,9 @@
     {% endfor %}
   </ul>
   {% endif %}
+  {% if result_pending %}
+  <p><em>Working draft while pricing continues.</em></p>
+  {% endif %}
   {% if result["items"] %}
   <table>
     <thead>

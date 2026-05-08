@@ -9,6 +9,9 @@ from sell_signal.config import Settings
 from sell_signal.prioritize import assign_priority
 from sell_signal.schema import AnalysisResult, IdentifiedItem, PriceBand, PrioritizedItem
 
+ProgressCallback = Callable[[str, str], None]
+ItemCallback = Callable[[PrioritizedItem], None]
+
 IDENTIFY_TEXT_PROMPT = """Return ONLY valid JSON array.
 Identify the resale item(s) described in this text.
 For each item return an object with keys:
@@ -116,7 +119,8 @@ class SmartProvider:
     def analyze_text(
         self,
         text: str,
-        progress_callback: Callable[[str, str], None] | None = None,
+        progress_callback: ProgressCallback | None = None,
+        item_callback: ItemCallback | None = None,
     ) -> AnalysisResult:
         self._emit_progress(progress_callback, 'identify', 'Identifying resale items from text')
         raw_items = self._run_json_query(IDENTIFY_TEXT_PROMPT.format(text=text))
@@ -130,10 +134,14 @@ class SmartProvider:
                 f'item{self._pluralize(found_count)} from text input'
             ),
         )
-        items = [
-            self._build_prioritized_item(entry, progress_callback=progress_callback)
-            for entry in normalized_items
-        ]
+        items: list[PrioritizedItem] = []
+        for entry in normalized_items:
+            prioritized = self._build_prioritized_item(
+                entry,
+                progress_callback=progress_callback,
+            )
+            items.append(prioritized)
+            self._emit_item(item_callback, prioritized)
         items.sort(key=lambda row: row.priority_score, reverse=True)
         self._emit_progress(
             progress_callback,
@@ -149,7 +157,8 @@ class SmartProvider:
     def analyze_images(
         self,
         image_paths: list[Path],
-        progress_callback: Callable[[str, str], None] | None = None,
+        progress_callback: ProgressCallback | None = None,
+        item_callback: ItemCallback | None = None,
     ) -> AnalysisResult:
         prioritized: list[PrioritizedItem] = []
         warnings: list[str] = []
@@ -206,13 +215,13 @@ class SmartProvider:
                 ),
             )
             for entry in chosen_items:
-                prioritized.append(
-                    self._build_prioritized_item(
-                        entry,
-                        source_image=image_path.name,
-                        progress_callback=progress_callback,
-                    )
+                prioritized_item = self._build_prioritized_item(
+                    entry,
+                    source_image=image_path.name,
+                    progress_callback=progress_callback,
                 )
+                prioritized.append(prioritized_item)
+                self._emit_item(item_callback, prioritized_item)
         merged_items = self._merge_duplicate_items(prioritized)
         merged_count = len(merged_items)
         self._emit_progress(
@@ -426,12 +435,20 @@ class SmartProvider:
 
     @staticmethod
     def _emit_progress(
-        progress_callback: Callable[[str, str], None] | None,
+        progress_callback: ProgressCallback | None,
         step: str,
         message: str,
     ) -> None:
         if progress_callback is not None:
             progress_callback(step, message)
+
+    @staticmethod
+    def _emit_item(
+        item_callback: ItemCallback | None,
+        item: PrioritizedItem,
+    ) -> None:
+        if item_callback is not None:
+            item_callback(item)
 
     @staticmethod
     def _pluralize(count: int) -> str:

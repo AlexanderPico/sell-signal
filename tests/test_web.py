@@ -76,7 +76,7 @@ class FakeProgressProvider:
     def __init__(self, settings) -> None:
         self.settings = settings
 
-    def analyze_text(self, text: str, progress_callback=None) -> AnalysisResult:
+    def analyze_text(self, text: str, progress_callback=None, item_callback=None) -> AnalysisResult:
         if progress_callback is not None:
             progress_callback('identify', 'Found 2 candidate books from text input')
             progress_callback('price_research', 'Researched prices for 2 candidate books')
@@ -98,6 +98,37 @@ class FakeProgressProvider:
                     why=['solid used comps'],
                 ),
             ],
+            provider='hermes_bridge',
+            model='gpt-5.4',
+        )
+
+
+class FakeStreamingProvider:
+    def __init__(self, settings) -> None:
+        self.settings = settings
+
+    def analyze_text(self, text: str, progress_callback=None, item_callback=None) -> AnalysisResult:
+        first = PrioritizedItem(
+            item=IdentifiedItem(name='Sapiens', category='book', confidence=0.97),
+            pricing=PriceBand(used_median=18.0, new_median=25.0, evidence=['source d']),
+            priority_score=72.0,
+            priority_label='sell',
+            why=['strong resale demand'],
+        )
+        if progress_callback is not None:
+            progress_callback('identify', 'Found 2 candidate books from text input')
+            progress_callback('price_research', 'Researching market prices for Sapiens')
+        if item_callback is not None:
+            item_callback(first)
+        second = PrioritizedItem(
+            item=IdentifiedItem(name='Educated', category='book', confidence=0.95),
+            pricing=PriceBand(used_median=12.0, new_median=20.0, evidence=['source e']),
+            priority_score=54.0,
+            priority_label='inspect',
+            why=['solid used comps'],
+        )
+        return AnalysisResult(
+            items=[first, second],
             provider='hermes_bridge',
             model='gpt-5.4',
         )
@@ -210,6 +241,48 @@ def test_async_analysis_status_reports_real_progress_and_results(monkeypatch) ->
     ]
     assert 'Sapiens' in data['result_html']
     assert 'Educated' in data['result_html']
+
+
+def test_status_renders_partial_results_while_job_is_running(monkeypatch) -> None:
+    import sell_signal.web as web
+
+    monkeypatch.setattr(web, 'SmartProvider', FakeStreamingProvider)
+    submission = web._build_submission_meta(text_input='Sapiens and Educated')
+    job_id = web._create_job(submission=submission, text_input='Sapiens and Educated')
+    web._record_job_progress(job_id, 'upload', 'Read text input and queued analysis')
+    web._run_analysis_job(
+        job_id=job_id,
+        submission=submission,
+        text_input='Sapiens and Educated',
+        image_paths=None,
+        temp_dir=None,
+    )
+    web._analysis_jobs[job_id]['status'] = 'running'
+    web._analysis_jobs[job_id]['result'] = None
+    web._analysis_jobs[job_id]['partial_result'] = {
+        'items': [web._analysis_jobs[job_id]['partial_result']['items'][0]],
+        'provider': 'hermes_bridge',
+        'model': 'gpt-5.4',
+        'warnings': [],
+    }
+    web._analysis_jobs[job_id]['current_step'] = 'price_research'
+    web._analysis_jobs[job_id]['current_message'] = 'Researching market prices for Educated'
+
+    status = client.get(f'/analyze/status/{job_id}')
+
+    assert status.status_code == 200
+    data = status.json()
+    assert data['status'] == 'running'
+    assert data['result'] is None
+    assert data['partial_result']['items'][0]['item']['name'] == 'Sapiens'
+    assert data['partial_summary'] == [
+        'Text prompt submitted',
+        '1 item priced so far',
+        'Final ranking will update when all pricing finishes',
+    ]
+    assert 'Working draft while pricing continues.' in data['result_html']
+    assert 'Sapiens' in data['result_html']
+    assert 'Educated' not in data['result_html']
 
 
 class ExplodingProvider:

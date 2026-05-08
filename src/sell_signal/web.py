@@ -96,15 +96,41 @@ def _build_result_summary(
     return summary
 
 
+def _build_partial_summary(
+    partial_result: dict | None,
+    submission: dict[str, Any],
+) -> list[str]:
+    if not partial_result:
+        return []
+
+    items = partial_result.get('items', [])
+    if not items:
+        return []
+
+    summary: list[str] = []
+    if submission['mode'] == 'images':
+        summary.append(f"{submission['upload_count']} upload(s) processed")
+    elif submission['mode'] == 'text':
+        summary.append('Text prompt submitted')
+
+    item_count = len(items)
+    summary.append(f"{item_count} item{'s' if item_count != 1 else ''} priced so far")
+    summary.append('Final ranking will update when all pricing finishes')
+    return summary
+
+
 def _render_result_section(
     *,
     result: dict | None = None,
     submission: dict[str, Any] | None = None,
+    result_summary: list[str] | None = None,
+    result_pending: bool = False,
 ) -> str:
     submission = submission or _build_submission_meta()
     return templates.env.get_template('_result_section.html').render(
         result=result,
-        result_summary=_build_result_summary(result, submission),
+        result_summary=result_summary or _build_result_summary(result, submission),
+        result_pending=result_pending,
     )
 
 
@@ -146,6 +172,7 @@ def _create_job(*, submission: dict[str, Any], text_input: str) -> str:
         'current_step': 'queued',
         'current_message': 'Queued analysis request',
         'result': None,
+        'partial_result': None,
         'error': None,
     }
     with _analysis_jobs_lock:
@@ -173,7 +200,23 @@ def _complete_job(job_id: str, result: dict[str, Any]) -> None:
         job = _analysis_jobs[job_id]
         job['status'] = 'completed'
         job['result'] = result
+        job['partial_result'] = result
         job['error'] = None
+
+
+def _record_partial_result(job_id: str, item: dict[str, Any]) -> None:
+    with _analysis_jobs_lock:
+        job = _analysis_jobs[job_id]
+        partial_result = job['partial_result']
+        if partial_result is None:
+            partial_result = {
+                'items': [],
+                'provider': get_settings().provider_mode,
+                'model': get_settings().model,
+                'warnings': [],
+            }
+            job['partial_result'] = partial_result
+        partial_result['items'].append(item)
 
 
 def _fail_job(job_id: str, error: str) -> None:
@@ -198,6 +241,7 @@ def _get_job(job_id: str) -> dict[str, Any]:
             'current_step': job['current_step'],
             'current_message': job['current_message'],
             'result': job['result'],
+            'partial_result': job['partial_result'],
             'error': job['error'],
         }
 
@@ -226,11 +270,22 @@ def _run_analysis_job(
     def progress_callback(step: str, message: str) -> None:
         _record_job_progress(job_id, step, message)
 
+    def item_callback(item) -> None:
+        _record_partial_result(job_id, item.model_dump())
+
     try:
         if image_paths:
-            result = provider.analyze_images(image_paths, progress_callback=progress_callback)
+            result = provider.analyze_images(
+                image_paths,
+                progress_callback=progress_callback,
+                item_callback=item_callback,
+            )
         else:
-            result = provider.analyze_text(text_input, progress_callback=progress_callback)
+            result = provider.analyze_text(
+                text_input,
+                progress_callback=progress_callback,
+                item_callback=item_callback,
+            )
         _complete_job(job_id, result.model_dump())
     except Exception as exc:
         _fail_job(job_id, f'Analysis failed: {exc}')
@@ -306,6 +361,13 @@ async def analyze_start(
 def analyze_status(job_id: str) -> JSONResponse:
     job = _get_job(job_id)
     result = job['result']
+    partial_result = job['partial_result']
+    display_result = result or partial_result
+    display_summary = (
+        _build_result_summary(result, job['submission'])
+        if result
+        else _build_partial_summary(partial_result, job['submission'])
+    )
     return JSONResponse(
         {
             'status': job['status'],
@@ -313,11 +375,15 @@ def analyze_status(job_id: str) -> JSONResponse:
             'current_message': job['current_message'],
             'events': job['events'],
             'result': result,
+            'partial_result': partial_result,
             'error': job['error'],
             'result_summary': _build_result_summary(result, job['submission']),
+            'partial_summary': _build_partial_summary(partial_result, job['submission']),
             'result_html': _render_result_section(
-                result=result,
+                result=display_result,
                 submission=job['submission'],
+                result_summary=display_summary,
+                result_pending=result is None and partial_result is not None,
             ),
         }
     )
