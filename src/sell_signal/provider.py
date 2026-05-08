@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from sell_signal.config import Settings
 from sell_signal.prioritize import assign_priority
@@ -24,7 +24,7 @@ Text:
 """
 
 IDENTIFY_IMAGE_PROMPT = """Return ONLY valid JSON array.
-Identify visible resale item(s) in this image.
+Identify distinct individually resellable items visible in this image.
 For each item return an object with keys:
 - name
 - category
@@ -33,8 +33,23 @@ For each item return an object with keys:
 - identifiers
 - notes
 
-If there is one obvious item, return one array element.
+Rules:
+- Return one array element per distinct sellable item.
+- Do NOT collapse multiple books/items into a single lot, bundle, shelf, or assorted set.
+- If the image shows many books on a shelf, list the individual titles you can read reliably.
+- If exact titles are not readable, omit that item instead of inventing details.
+- Use lowercase category labels where possible.
+"""
+
+ITEMIZE_IMAGE_PROMPT = """Return ONLY valid JSON array.
+The first pass summarized this image too broadly as a grouped result.
+Re-examine the image and list distinct individually resellable items only.
+Do NOT return a single lot, bundle, shelf, mixed set, collection, or assorted grouping.
+Return one array element per visible item that could plausibly become its own sale listing.
+If exact titles are not readable, omit that item instead of guessing.
 Use lowercase category labels where possible.
+Context from the grouped pass:
+{grouped_item_json}
 """
 
 PRICE_RESEARCH_PROMPT = """Use web research to estimate likely resale market ranges in USD.
@@ -59,22 +74,56 @@ class SmartProvider:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
 
-    def analyze_text(self, text: str) -> AnalysisResult:
+    def analyze_text(
+        self,
+        text: str,
+        progress_callback: Callable[[str, str], None] | None = None,
+    ) -> AnalysisResult:
+        self._emit_progress(progress_callback, 'identify', 'Identifying resale items from text')
         raw_items = self._run_json_query(IDENTIFY_TEXT_PROMPT.format(text=text))
+        normalized_items = self._normalize_items(raw_items)
+        found_count = len(normalized_items)
+        self._emit_progress(
+            progress_callback,
+            'identify',
+            (
+                f'Found {found_count} candidate '
+                f'item{self._pluralize(found_count)} from text input'
+            ),
+        )
         items = [
-            self._build_prioritized_item(entry)
-            for entry in self._normalize_items(raw_items)
+            self._build_prioritized_item(entry, progress_callback=progress_callback)
+            for entry in normalized_items
         ]
+        items.sort(key=lambda row: row.priority_score, reverse=True)
+        self._emit_progress(
+            progress_callback,
+            'rank',
+            f'Ranked {len(items)} item{self._pluralize(len(items))} by resale priority',
+        )
         return AnalysisResult(
             items=items,
             provider=self.settings.provider_mode,
             model=self.settings.model,
         )
 
-    def analyze_images(self, image_paths: list[Path]) -> AnalysisResult:
+    def analyze_images(
+        self,
+        image_paths: list[Path],
+        progress_callback: Callable[[str, str], None] | None = None,
+    ) -> AnalysisResult:
         prioritized: list[PrioritizedItem] = []
         warnings: list[str] = []
-        for image_path in image_paths:
+        image_count = len(image_paths)
+        self._emit_progress(
+            progress_callback,
+            'identify',
+            (
+                f'Analyzing {image_count} '
+                f'image{self._pluralize(image_count)} for distinct items'
+            ),
+        )
+        for image_index, image_path in enumerate(image_paths, start=1):
             try:
                 raw_items = self._run_json_query(
                     IDENTIFY_IMAGE_PROMPT,
@@ -83,12 +132,46 @@ class SmartProvider:
             except Exception as exc:
                 warnings.append(f"{image_path.name}: {exc}")
                 continue
-            for entry in self._normalize_items(raw_items):
-                prioritized.append(
-                    self._build_prioritized_item(entry, source_image=image_path.name)
+            normalized_items = self._normalize_items(raw_items)
+            if self._should_retry_as_itemized(normalized_items):
+                self._emit_progress(
+                    progress_callback,
+                    'identify',
+                    (
+                        f'Image {image_index} of {len(image_paths)} returned a grouped lot; '
+                        'retrying for individual items'
+                    ),
                 )
+                normalized_items = self._expand_grouped_image_items(image_path, normalized_items[0])
+            item_count = len(normalized_items)
+            self._emit_progress(
+                progress_callback,
+                'identify',
+                (
+                    f'Image {image_index} of {image_count}: '
+                    f'found {item_count} candidate item{self._pluralize(item_count)}'
+                ),
+            )
+            for entry in normalized_items:
+                prioritized.append(
+                    self._build_prioritized_item(
+                        entry,
+                        source_image=image_path.name,
+                        progress_callback=progress_callback,
+                    )
+                )
+        merged_items = self._merge_duplicate_items(prioritized)
+        merged_count = len(merged_items)
+        self._emit_progress(
+            progress_callback,
+            'rank',
+            (
+                f'Ranked {merged_count} '
+                f'item{self._pluralize(merged_count)} by resale priority'
+            ),
+        )
         return AnalysisResult(
-            items=self._merge_duplicate_items(prioritized),
+            items=merged_items,
             provider=self.settings.provider_mode,
             model=self.settings.model,
             warnings=warnings,
@@ -99,15 +182,26 @@ class SmartProvider:
         payload: dict[str, Any],
         *,
         source_image: str | None = None,
+        progress_callback: Callable[[str, str], None] | None = None,
     ) -> PrioritizedItem:
         item = IdentifiedItem.model_validate(self._normalize_identified_item(payload))
-        pricing = self._research_price(item)
+        pricing = self._research_price(item, progress_callback=progress_callback)
         prioritized = assign_priority(PrioritizedItem(item=item, pricing=pricing))
         if source_image:
             prioritized.source_images = [source_image]
         return prioritized
 
-    def _research_price(self, item: IdentifiedItem) -> PriceBand:
+    def _research_price(
+        self,
+        item: IdentifiedItem,
+        *,
+        progress_callback: Callable[[str, str], None] | None = None,
+    ) -> PriceBand:
+        self._emit_progress(
+            progress_callback,
+            'price_research',
+            f'Researching market prices for {item.name}',
+        )
         payload = self._run_json_query(
             PRICE_RESEARCH_PROMPT.format(
                 item_json=json.dumps(item.model_dump(mode="json"))
@@ -130,6 +224,38 @@ class SmartProvider:
             "Expected JSON object or array from Hermes, "
             f"got: {type(payload).__name__}"
         )
+
+    def _should_retry_as_itemized(self, items: list[dict[str, Any]]) -> bool:
+        if len(items) != 1:
+            return False
+        item = items[0]
+        name = str(item.get('name', '')).strip().lower()
+        notes = str(item.get('notes', '') or '').strip().lower()
+        grouped_markers = (
+            'assorted',
+            'lot',
+            'bundle',
+            'collection',
+            'shelf',
+            'mixed',
+            'set',
+            'library',
+        )
+        haystack = f'{name} {notes}'
+        return any(marker in haystack for marker in grouped_markers)
+
+    def _expand_grouped_image_items(
+        self,
+        image_path: Path,
+        grouped_item: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        payload = self._run_json_query(
+            ITEMIZE_IMAGE_PROMPT.format(
+                grouped_item_json=json.dumps(grouped_item, ensure_ascii=False)
+            ),
+            image_path=image_path,
+        )
+        return self._normalize_items(payload)
 
     def _normalize_identified_item(self, payload: dict[str, Any]) -> dict[str, Any]:
         normalized = dict(payload)
@@ -179,6 +305,19 @@ class SmartProvider:
             item.item.category.strip().lower(),
             " ".join(item.item.name.strip().lower().split()),
         )
+
+    @staticmethod
+    def _emit_progress(
+        progress_callback: Callable[[str, str], None] | None,
+        step: str,
+        message: str,
+    ) -> None:
+        if progress_callback is not None:
+            progress_callback(step, message)
+
+    @staticmethod
+    def _pluralize(count: int) -> str:
+        return '' if count == 1 else 's'
 
     def _run_json_query(
         self,

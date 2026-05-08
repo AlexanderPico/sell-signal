@@ -9,17 +9,7 @@
     <main>
       <h1>sell-signal</h1>
       <p>Hosted-model resale triage using your existing Hermes connection.</p>
-      {% if error %}<div class="error" role="alert">{{ error }}</div>{% endif %}
-      {% if result and result["warnings"] %}
-      <div class="warning" role="alert">
-        <p><strong>Some images could not be analyzed.</strong></p>
-        <ul>
-          {% for warning in result["warnings"] %}
-          <li>{{ warning }}</li>
-          {% endfor %}
-        </ul>
-      </div>
-      {% endif %}
+      <div id="analysis-error" {% if not error %}hidden{% endif %} class="error" role="alert">{{ error or '' }}</div>
       <form id="analyze-form" method="post" action="/analyze" enctype="multipart/form-data">
         <label for="text_input">Text input</label>
         <textarea id="text_input" name="text_input" rows="4" placeholder="The Manga Guide to Relativity by Hideo Nitta paperback">{{ text_input }}</textarea>
@@ -28,120 +18,145 @@
         <div id="submission-status" class="status" aria-live="polite"></div>
         <ol id="submission-steps" class="status-steps" aria-live="polite">
           {% for step in submission["progress_steps"] %}
-          <li data-step-index="{{ loop.index0 }}">{{ step }}</li>
+          <li data-step-id="{{ step['id'] }}">{{ step['label'] }}</li>
           {% endfor %}
         </ol>
+        <ul id="submission-findings" class="status-findings"></ul>
         <p class="hint">This can take 10 to 30 seconds.</p>
         <button id="analyze-button" type="submit">Analyze</button>
       </form>
-      {% if result %}
-      <section>
-        <h2>Prioritized items</h2>
-        <p>Provider: {{ result["provider"] }} · Model: {{ result["model"] }}</p>
-        {% if result_summary %}
-        <ul class="result-summary">
-          {% for line in result_summary %}
-          <li>{{ line }}</li>
-          {% endfor %}
-        </ul>
-        {% endif %}
-        {% if result["items"] %}
-        <table>
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Category</th>
-              <th>Confidence</th>
-              <th>Seen in</th>
-              <th>Used median</th>
-              <th>New median</th>
-              <th>Priority</th>
-              <th>Why</th>
-              <th>Evidence</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for row in result["items"] %}
-            <tr>
-              <td>{{ row["item"]["name"] }}</td>
-              <td>{{ row["item"]["category"] }}</td>
-              <td>{{ row["item"]["confidence"] }}</td>
-              <td>{{ ', '.join(row["source_images"]) if row["source_images"] else 'text input' }}</td>
-              <td>{{ row["pricing"]["used_median"] }}</td>
-              <td>{{ row["pricing"]["new_median"] }}</td>
-              <td>{{ row["priority_label"] }} ({{ row["priority_score"] }})</td>
-              <td>{{ '; '.join(row["why"]) }}</td>
-              <td>{{ '; '.join(row["pricing"]["evidence"]) }}</td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-        {% else %}
-        <div class="empty-result">
-          <p><strong>No resale items identified.</strong></p>
-          <p>Try a clearer photo or add a short text description.</p>
-        </div>
-        {% endif %}
-      </section>
-      {% endif %}
+      <div id="analysis-output">
+        {% include "_result_section.html" %}
+      </div>
     </main>
     <script>
       const form = document.getElementById('analyze-form');
       const status = document.getElementById('submission-status');
       const button = document.getElementById('analyze-button');
-      const textInput = document.getElementById('text_input');
-      const filesInput = document.getElementById('files');
+      const errorBox = document.getElementById('analysis-error');
+      const output = document.getElementById('analysis-output');
+      const findings = document.getElementById('submission-findings');
       const stepElements = Array.from(document.querySelectorAll('#submission-steps li'));
 
-      const setActiveStep = (index) => {
-        stepElements.forEach((element, elementIndex) => {
-          element.classList.toggle('active', elementIndex === index);
-          element.classList.toggle('done', elementIndex < index);
+      const resetProgressUi = () => {
+        stepElements.forEach((element) => {
+          element.classList.remove('active', 'done');
         });
+        if (findings) {
+          findings.innerHTML = '';
+        }
       };
 
-      form?.addEventListener('submit', () => {
-        const hasText = Boolean(textInput?.value.trim());
-        const fileCount = filesInput?.files?.length ?? 0;
-        const stepMessages = fileCount > 0
-          ? [
-              `Preparing ${fileCount} image upload${fileCount === 1 ? '' : 's'}`,
-              `Saving ${fileCount} upload(s) for analysis`,
-              `Identifying resale items from ${fileCount} image${fileCount === 1 ? '' : 's'}`,
-              'Researching market prices from the identified items',
-              'Ranking resale priority and preparing the results table',
-            ]
-          : hasText
-            ? [
-                'Preparing text analysis request',
-                'Reading your text prompt',
-                'Identifying resale items from text',
-                'Researching market prices from the identified items',
-                'Ranking resale priority and preparing the results table',
-              ]
-            : ['Submitting request'];
-
-        stepMessages.forEach((message, index) => {
-          if (stepElements[index]) {
-            stepElements[index].textContent = message;
-          }
-        });
-
-        const timers = [0, 800, 3500, 8000, 14000];
-        timers.forEach((delay, index) => {
-          window.setTimeout(() => {
-            if (status) {
-              status.textContent = stepMessages[index] ?? stepMessages[stepMessages.length - 1];
-            }
-            setActiveStep(index);
-          }, delay);
-        });
-
-        if (button) {
-          button.disabled = true;
-          button.textContent = 'Analyzing...';
+      const setError = (message) => {
+        if (!errorBox) {
+          return;
         }
-        form.setAttribute('aria-busy', 'true');
+        if (message) {
+          errorBox.textContent = message;
+          errorBox.hidden = false;
+        } else {
+          errorBox.textContent = '';
+          errorBox.hidden = true;
+        }
+      };
+
+      const setButtonState = (busy) => {
+        if (!button || !form) {
+          return;
+        }
+        button.disabled = busy;
+        button.textContent = busy ? 'Analyzing...' : 'Analyze';
+        if (busy) {
+          form.setAttribute('aria-busy', 'true');
+        } else {
+          form.removeAttribute('aria-busy');
+        }
+      };
+
+      const renderProgress = (payload) => {
+        if (status) {
+          status.textContent = payload.current_message || 'Queued analysis request';
+        }
+
+        const seenSteps = new Set((payload.events || []).map((event) => event.step));
+        const currentStep = payload.current_step;
+        let currentIndex = stepElements.findIndex(
+          (element) => element.dataset.stepId === currentStep,
+        );
+        if (currentIndex === -1) {
+          currentIndex = stepElements.length;
+        }
+
+        stepElements.forEach((element, index) => {
+          const stepId = element.dataset.stepId;
+          const isDone = seenSteps.has(stepId) && stepId !== currentStep;
+          element.classList.toggle('done', isDone || index < currentIndex);
+          element.classList.toggle('active', stepId === currentStep);
+        });
+
+        if (findings) {
+          findings.innerHTML = (payload.events || [])
+            .map((event) => `<li>${event.message}</li>`)
+            .join('');
+        }
+      };
+
+      const pollJob = async (jobId) => {
+        while (true) {
+          const response = await fetch(`/analyze/status/${jobId}`);
+          const payload = await response.json();
+          if (!response.ok) {
+            throw new Error(payload.detail || 'Failed to read analysis status');
+          }
+
+          renderProgress(payload);
+
+          if (payload.status === 'completed') {
+            output.innerHTML = payload.result_html || '';
+            setButtonState(false);
+            setError('');
+            return;
+          }
+
+          if (payload.status === 'failed') {
+            setButtonState(false);
+            setError(payload.error || 'Analysis failed');
+            return;
+          }
+
+          await new Promise((resolve) => window.setTimeout(resolve, 700));
+        }
+      };
+
+      form?.addEventListener('submit', async (event) => {
+        if (!window.fetch) {
+          return;
+        }
+        event.preventDefault();
+        resetProgressUi();
+        setError('');
+        if (output) {
+          output.innerHTML = '';
+        }
+        setButtonState(true);
+        if (status) {
+          status.textContent = 'Submitting analysis request...';
+        }
+
+        try {
+          const response = await fetch('/analyze/start', {
+            method: 'POST',
+            body: new FormData(form),
+          });
+          const payload = await response.json();
+          if (!response.ok) {
+            throw new Error(payload.detail || 'Unable to start analysis');
+          }
+          await pollJob(payload.job_id);
+        } catch (error) {
+          setButtonState(false);
+          setError(error instanceof Error ? error.message : 'Unable to start analysis');
+        }
       });
     </script>
   </body>

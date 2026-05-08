@@ -106,3 +106,44 @@ def test_analyze_images_dedupes_and_keeps_partial_failures(monkeypatch) -> None:
     assert result.items[0].item.name == 'Example Book'
     assert result.items[0].source_images == ['front.jpg', 'spine.jpg']
     assert result.warnings == ['broken.jpg: vision backend timeout']
+
+
+def test_analyze_images_retries_grouped_book_lot_as_individual_items(monkeypatch) -> None:
+    provider = SmartProvider(Settings())
+    prompts: list[str] = []
+
+    def fake_run(prompt: str, *, image_path=None, toolsets=None):
+        prompts.append(prompt)
+        if toolsets == 'web':
+            return {
+                'used_low': 10,
+                'used_high': 30,
+                'used_median': 20,
+                'new_low': 25,
+                'new_high': 40,
+                'new_median': 32,
+                'currency': 'USD',
+                'evidence': ['source a'],
+            }
+        assert image_path is not None
+        if 'Do NOT return a single lot' in prompt:
+            return [
+                {'name': 'Sapiens', 'category': 'book', 'confidence': 0.96},
+                {'name': 'Educated', 'category': 'book', 'confidence': 0.94},
+            ]
+        return [
+            {
+                'name': 'assorted nonfiction books lot',
+                'category': 'book',
+                'confidence': 0.89,
+                'notes': 'many books on a shelf',
+            }
+        ]
+
+    monkeypatch.setattr(provider, '_run_json_query', fake_run)
+
+    result = provider.analyze_images([Path('shelf.jpg')])
+
+    assert [item.item.name for item in result.items] == ['Sapiens', 'Educated']
+    assert all('lot' not in item.item.name.lower() for item in result.items)
+    assert any('Do NOT return a single lot' in prompt for prompt in prompts)

@@ -47,10 +47,14 @@ class FakeMultiImageProvider:
     def __init__(self, settings) -> None:
         self.settings = settings
 
-    def analyze_text(self, text: str) -> AnalysisResult:
+    def analyze_text(self, text: str, progress_callback=None) -> AnalysisResult:
         raise AssertionError('not used in this test')
 
-    def analyze_images(self, image_paths) -> AnalysisResult:
+    def analyze_images(self, image_paths, progress_callback=None) -> AnalysisResult:
+        if progress_callback is not None:
+            progress_callback('identify', 'Identified 1 distinct book across 3 uploads')
+            progress_callback('price_research', 'Researched 1 item price from 1 candidate')
+            progress_callback('rank', 'Ranked 1 item by resale priority')
         return AnalysisResult(
             items=[
                 PrioritizedItem(
@@ -65,6 +69,37 @@ class FakeMultiImageProvider:
             provider='hermes_bridge',
             model='gpt-5.4',
             warnings=['blurred.jpg: vision backend timeout'],
+        )
+
+
+class FakeProgressProvider:
+    def __init__(self, settings) -> None:
+        self.settings = settings
+
+    def analyze_text(self, text: str, progress_callback=None) -> AnalysisResult:
+        if progress_callback is not None:
+            progress_callback('identify', 'Found 2 candidate books from text input')
+            progress_callback('price_research', 'Researched prices for 2 candidate books')
+            progress_callback('rank', 'Ranked 2 books by resale priority')
+        return AnalysisResult(
+            items=[
+                PrioritizedItem(
+                    item=IdentifiedItem(name='Sapiens', category='book', confidence=0.97),
+                    pricing=PriceBand(used_median=18.0, new_median=25.0, evidence=['source d']),
+                    priority_score=72.0,
+                    priority_label='sell',
+                    why=['strong resale demand'],
+                ),
+                PrioritizedItem(
+                    item=IdentifiedItem(name='Educated', category='book', confidence=0.95),
+                    pricing=PriceBand(used_median=12.0, new_median=20.0, evidence=['source e']),
+                    priority_score=54.0,
+                    priority_label='inspect',
+                    why=['solid used comps'],
+                ),
+            ],
+            provider='hermes_bridge',
+            model='gpt-5.4',
         )
 
 
@@ -141,6 +176,40 @@ def test_multi_image_analysis_shows_sources_warnings_and_summary(monkeypatch) ->
     assert '3 upload(s) processed' in response.text
     assert '1 item prioritized' in response.text
     assert 'Top recommendation: sell — Merged Book' in response.text
+
+
+def test_async_analysis_status_reports_real_progress_and_results(monkeypatch) -> None:
+    import sell_signal.web as web
+
+    monkeypatch.setattr(web, 'SmartProvider', FakeProgressProvider)
+    start = client.post(
+        '/analyze/start',
+        data={'text_input': 'Sapiens and Educated'},
+    )
+    assert start.status_code == 200
+    payload = start.json()
+    assert payload['job_id']
+
+    status = client.get(f"/analyze/status/{payload['job_id']}")
+    assert status.status_code == 200
+    data = status.json()
+    assert data['status'] == 'completed'
+    assert data['current_step'] == 'rank'
+    assert data['current_message'] == 'Ranked 2 books by resale priority'
+    assert data['result_summary'] == [
+        'Text prompt submitted',
+        '2 items prioritized',
+        'Top recommendation: sell — Sapiens',
+    ]
+    assert [event['message'] for event in data['events']] == [
+        'Queued analysis request',
+        'Read text input and queued analysis',
+        'Found 2 candidate books from text input',
+        'Researched prices for 2 candidate books',
+        'Ranked 2 books by resale priority',
+    ]
+    assert 'Sapiens' in data['result_html']
+    assert 'Educated' in data['result_html']
 
 
 class ExplodingProvider:

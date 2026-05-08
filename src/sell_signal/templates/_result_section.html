@@ -1,0 +1,60 @@
+{% if result and result["warnings"] %}
+<div class="warning" role="alert">
+  <p><strong>Some images could not be analyzed.</strong></p>
+  <ul>
+    {% for warning in result["warnings"] %}
+    <li>{{ warning }}</li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+{% if result %}
+<section>
+  <h2>Prioritized items</h2>
+  <p>Provider: {{ result["provider"] }} · Model: {{ result["model"] }}</p>
+  {% if result_summary %}
+  <ul class="result-summary">
+    {% for line in result_summary %}
+    <li>{{ line }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  {% if result["items"] %}
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Category</th>
+        <th>Confidence</th>
+        <th>Seen in</th>
+        <th>Used median</th>
+        <th>New median</th>
+        <th>Priority</th>
+        <th>Why</th>
+        <th>Evidence</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in result["items"] %}
+      <tr>
+        <td>{{ row["item"]["name"] }}</td>
+        <td>{{ row["item"]["category"] }}</td>
+        <td>{{ row["item"]["confidence"] }}</td>
+        <td>{{ ', '.join(row["source_images"]) if row["source_images"] else 'text input' }}</td>
+        <td>{{ row["pricing"]["used_median"] }}</td>
+        <td>{{ row["pricing"]["new_median"] }}</td>
+        <td>{{ row["priority_label"] }} ({{ row["priority_score"] }})</td>
+        <td>{{ '; '.join(row["why"]) }}</td>
+        <td>{{ '; '.join(row["pricing"]["evidence"]) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty-result">
+    <p><strong>No resale items identified.</strong></p>
+    <p>Try a clearer photo or add a short text description.</p>
+  </div>
+  {% endif %}
+</section>
+{% endif %}
