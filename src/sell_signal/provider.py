@@ -52,6 +52,45 @@ Context from the grouped pass:
 {grouped_item_json}
 """
 
+MEDIA_SHELF_PROMPT = """Return ONLY valid JSON array.
+Focus only on shelves of books, dvds, blu-rays, or similar spine-out media.
+Ignore furniture, decor, rugs, plants, and other non-media objects.
+For each visible media item return an object with keys:
+- name
+- category
+- confidence
+- condition_guess
+- identifiers
+- notes
+
+Rules:
+- Return one array element per distinct media item.
+- Prefer readable book titles and dvd/blu-ray titles visible on spines or covers.
+- Use category "book" for books and "dvd" for dvds, blu-rays, and boxed video media.
+- If a title is not readable reliably, omit it instead of guessing.
+- If there are no clearly readable shelf-media items, return [].
+"""
+
+MEDIA_SHELF_SECTION_PROMPT = """Return ONLY valid JSON array.
+Focus only on shelves of books, dvds, blu-rays, or similar spine-out media.
+Ignore furniture, decor, rugs, plants, and other non-media objects.
+Focus only on this section of the image: {section_name}.
+For each visible media item return an object with keys:
+- name
+- category
+- confidence
+- condition_guess
+- identifiers
+- notes
+
+Rules:
+- Return one array element per distinct media item.
+- Prefer readable book titles and dvd/blu-ray titles visible on spines or covers.
+- Use category "book" for books and "dvd" for dvds, blu-rays, and boxed video media.
+- If a title is not readable reliably, omit it instead of guessing.
+- If there are no clearly readable shelf-media items in this section, return [].
+"""
+
 PRICE_RESEARCH_PROMPT = """Use web research to estimate likely resale market ranges in USD.
 Focus on practical seller triage, not collector-grade precision.
 Return ONLY valid JSON object with keys:
@@ -143,7 +182,21 @@ class SmartProvider:
                     ),
                 )
                 normalized_items = self._expand_grouped_image_items(image_path, normalized_items[0])
-            item_count = len(normalized_items)
+            media_items = self._extract_media_shelf_items(image_path)
+            chosen_items = self._select_image_items(
+                generic_items=normalized_items,
+                media_items=media_items,
+            )
+            if media_items and chosen_items == media_items:
+                self._emit_progress(
+                    progress_callback,
+                    'identify',
+                    (
+                        f'Image {image_index} of {image_count}: '
+                        'using shelf-media extraction for books and dvds'
+                    ),
+                )
+            item_count = len(chosen_items)
             self._emit_progress(
                 progress_callback,
                 'identify',
@@ -152,7 +205,7 @@ class SmartProvider:
                     f'found {item_count} candidate item{self._pluralize(item_count)}'
                 ),
             )
-            for entry in normalized_items:
+            for entry in chosen_items:
                 prioritized.append(
                     self._build_prioritized_item(
                         entry,
@@ -217,9 +270,17 @@ class SmartProvider:
 
     def _normalize_items(self, payload: Any) -> list[dict[str, Any]]:
         if isinstance(payload, dict):
-            return [payload]
+            payload = [payload]
         if isinstance(payload, list):
-            return [entry for entry in payload if isinstance(entry, dict)]
+            normalized: list[dict[str, Any]] = []
+            for entry in payload:
+                if not isinstance(entry, dict):
+                    continue
+                name = entry.get('name')
+                if not isinstance(name, str) or not name.strip():
+                    continue
+                normalized.append(entry)
+            return normalized
         raise ValueError(
             "Expected JSON object or array from Hermes, "
             f"got: {type(payload).__name__}"
@@ -256,6 +317,63 @@ class SmartProvider:
             image_path=image_path,
         )
         return self._normalize_items(payload)
+
+    def _extract_media_shelf_items(self, image_path: Path) -> list[dict[str, Any]]:
+        payload = self._run_json_query(MEDIA_SHELF_PROMPT, image_path=image_path)
+        items = self._normalize_items(payload)
+        if items:
+            return self._merge_raw_items([], items)
+        section_items: list[dict[str, Any]] = []
+        for section_name in ('left third', 'center third', 'right third'):
+            section_payload = self._run_json_query(
+                MEDIA_SHELF_SECTION_PROMPT.format(section_name=section_name),
+                image_path=image_path,
+            )
+            section_items.extend(self._normalize_items(section_payload))
+        return self._merge_raw_items([], section_items)
+
+    def _select_image_items(
+        self,
+        *,
+        generic_items: list[dict[str, Any]],
+        media_items: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        if not media_items:
+            return generic_items
+        if len(media_items) >= 2:
+            return media_items
+        if not generic_items:
+            return media_items
+        if not any(self._is_media_item_payload(item) for item in generic_items):
+            return media_items
+        return self._merge_raw_items(generic_items, media_items)
+
+    def _merge_raw_items(
+        self,
+        generic_items: list[dict[str, Any]],
+        media_items: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        merged: dict[tuple[str, str], dict[str, Any]] = {}
+        for item in [*generic_items, *media_items]:
+            key = self._raw_item_dedupe_key(item)
+            existing = merged.get(key)
+            if existing is None or float(item.get('confidence', 0.0) or 0.0) > float(
+                existing.get('confidence', 0.0) or 0.0
+            ):
+                merged[key] = item
+        return list(merged.values())
+
+    @staticmethod
+    def _is_media_item_payload(item: dict[str, Any]) -> bool:
+        category = str(item.get('category', '')).strip().lower()
+        return category in {'book', 'dvd'}
+
+    @staticmethod
+    def _raw_item_dedupe_key(item: dict[str, Any]) -> tuple[str, str]:
+        return (
+            str(item.get('category', '')).strip().lower(),
+            ' '.join(str(item.get('name', '')).strip().lower().split()),
+        )
 
     def _normalize_identified_item(self, payload: dict[str, Any]) -> dict[str, Any]:
         normalized = dict(payload)

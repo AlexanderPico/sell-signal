@@ -131,6 +131,8 @@ def test_analyze_images_retries_grouped_book_lot_as_individual_items(monkeypatch
                 {'name': 'Sapiens', 'category': 'book', 'confidence': 0.96},
                 {'name': 'Educated', 'category': 'book', 'confidence': 0.94},
             ]
+        if 'Focus only on shelves of books, dvds, blu-rays, or similar spine-out media.' in prompt:
+            return []
         return [
             {
                 'name': 'assorted nonfiction books lot',
@@ -147,3 +149,191 @@ def test_analyze_images_retries_grouped_book_lot_as_individual_items(monkeypatch
     assert [item.item.name for item in result.items] == ['Sapiens', 'Educated']
     assert all('lot' not in item.item.name.lower() for item in result.items)
     assert any('Do NOT return a single lot' in prompt for prompt in prompts)
+
+
+def test_analyze_images_uses_media_shelf_fallback_when_generic_pass_finds_nothing(
+    monkeypatch,
+) -> None:
+    provider = SmartProvider(Settings())
+    prompts: list[str] = []
+
+    def fake_run(prompt: str, *, image_path=None, toolsets=None):
+        prompts.append(prompt)
+        if toolsets == 'web':
+            return {
+                'used_low': 12,
+                'used_high': 28,
+                'used_median': 20,
+                'new_low': 20,
+                'new_high': 35,
+                'new_median': 26,
+                'currency': 'USD',
+                'evidence': ['source a'],
+            }
+        assert image_path is not None
+        if 'Focus only on shelves of books, dvds, blu-rays, or similar spine-out media.' in prompt:
+            return [
+                {'name': 'Sapiens', 'category': 'book', 'confidence': 0.97},
+                {'name': 'Planet Earth II', 'category': 'dvd', 'confidence': 0.95},
+            ]
+        return []
+
+    monkeypatch.setattr(provider, '_run_json_query', fake_run)
+
+    result = provider.analyze_images([Path('media-shelf.jpg')])
+
+    assert {item.item.name for item in result.items} == {'Sapiens', 'Planet Earth II'}
+    assert {item.item.category for item in result.items} == {'book', 'dvd'}
+    assert any(
+        'Focus only on shelves of books, dvds, blu-rays, or similar spine-out media.'
+        in prompt
+        for prompt in prompts
+    )
+
+
+def test_analyze_images_prefers_media_shelf_items_over_room_decor(monkeypatch) -> None:
+    provider = SmartProvider(Settings())
+
+    def fake_run(prompt: str, *, image_path=None, toolsets=None):
+        if toolsets == 'web':
+            return {
+                'used_low': 15,
+                'used_high': 45,
+                'used_median': 25,
+                'new_low': 25,
+                'new_high': 60,
+                'new_median': 40,
+                'currency': 'USD',
+                'evidence': ['source a'],
+            }
+        assert image_path is not None
+        if 'Focus only on shelves of books, dvds, blu-rays, or similar spine-out media.' in prompt:
+            return [
+                {'name': 'Sapiens', 'category': 'book', 'confidence': 0.97},
+                {'name': 'Planet Earth II', 'category': 'dvd', 'confidence': 0.95},
+                {'name': 'The Wire: Season 1', 'category': 'dvd', 'confidence': 0.94},
+            ]
+        return [
+            {'name': 'tan upholstered armchair', 'category': 'furniture', 'confidence': 0.96},
+            {'name': 'large framed wall art', 'category': 'art', 'confidence': 0.83},
+        ]
+
+    monkeypatch.setattr(provider, '_run_json_query', fake_run)
+
+    result = provider.analyze_images([Path('living-room-bookshelf.jpg')])
+
+    assert {item.item.name for item in result.items} == {
+        'Sapiens',
+        'Planet Earth II',
+        'The Wire: Season 1',
+    }
+    assert all(item.item.category in {'book', 'dvd'} for item in result.items)
+
+
+def test_analyze_images_retries_media_shelf_by_section_when_full_pass_is_empty(monkeypatch) -> None:
+    provider = SmartProvider(Settings())
+    prompts: list[str] = []
+
+    def fake_run(prompt: str, *, image_path=None, toolsets=None):
+        prompts.append(prompt)
+        if toolsets == 'web':
+            return {
+                'used_low': 15,
+                'used_high': 45,
+                'used_median': 25,
+                'new_low': 25,
+                'new_high': 60,
+                'new_median': 40,
+                'currency': 'USD',
+                'evidence': ['source a'],
+            }
+        assert image_path is not None
+        if 'Focus only on this section of the image: left third.' in prompt:
+            return [{'name': 'Sapiens', 'category': 'book', 'confidence': 0.97}]
+        if 'Focus only on this section of the image: center third.' in prompt:
+            return [{'name': 'Planet Earth II', 'category': 'dvd', 'confidence': 0.95}]
+        if 'Focus only on this section of the image: right third.' in prompt:
+            return []
+        if 'Focus only on shelves of books, dvds, blu-rays, or similar spine-out media.' in prompt:
+            return []
+        return []
+
+    monkeypatch.setattr(provider, '_run_json_query', fake_run)
+
+    result = provider.analyze_images([Path('dense-media-shelf.jpg')])
+
+    assert {item.item.name for item in result.items} == {'Sapiens', 'Planet Earth II'}
+    assert any(
+        'Focus only on this section of the image: left third.' in prompt
+        for prompt in prompts
+    )
+    assert any(
+        'Focus only on this section of the image: center third.' in prompt
+        for prompt in prompts
+    )
+
+
+def test_analyze_images_skips_invalid_media_candidates_instead_of_failing(monkeypatch) -> None:
+    provider = SmartProvider(Settings())
+
+    def fake_run(prompt: str, *, image_path=None, toolsets=None):
+        if toolsets == 'web':
+            return {
+                'used_low': 15,
+                'used_high': 45,
+                'used_median': 25,
+                'new_low': 25,
+                'new_high': 60,
+                'new_median': 40,
+                'currency': 'USD',
+                'evidence': ['source a'],
+            }
+        assert image_path is not None
+        if 'Focus only on shelves of books, dvds, blu-rays, or similar spine-out media.' in prompt:
+            return [
+                {'name': None, 'category': 'book', 'confidence': 0.91},
+                {'name': 'Sapiens', 'category': 'book', 'confidence': 0.97},
+            ]
+        return []
+
+    monkeypatch.setattr(provider, '_run_json_query', fake_run)
+
+    result = provider.analyze_images([Path('messy-media-shelf.jpg')])
+
+    assert [item.item.name for item in result.items] == ['Sapiens']
+
+
+def test_analyze_images_dedupes_media_shelf_candidates_before_price_research(monkeypatch) -> None:
+    provider = SmartProvider(Settings())
+    priced_names: list[str] = []
+
+    def fake_run(prompt: str, *, image_path=None, toolsets=None):
+        if toolsets == 'web':
+            item_name = 'Sapiens' if 'Sapiens' in prompt else 'Educated'
+            priced_names.append(item_name)
+            return {
+                'used_low': 15,
+                'used_high': 45,
+                'used_median': 25,
+                'new_low': 25,
+                'new_high': 60,
+                'new_median': 40,
+                'currency': 'USD',
+                'evidence': ['source a'],
+            }
+        assert image_path is not None
+        if 'Focus only on shelves of books, dvds, blu-rays, or similar spine-out media.' in prompt:
+            return [
+                {'name': 'Sapiens', 'category': 'book', 'confidence': 0.96},
+                {'name': 'sapiens', 'category': 'book', 'confidence': 0.94},
+                {'name': 'Educated', 'category': 'book', 'confidence': 0.92},
+            ]
+        return []
+
+    monkeypatch.setattr(provider, '_run_json_query', fake_run)
+
+    result = provider.analyze_images([Path('duplicate-media-shelf.jpg')])
+
+    assert {item.item.name for item in result.items} == {'Sapiens', 'Educated'}
+    assert priced_names.count('Sapiens') == 1
+    assert priced_names.count('Educated') == 1
