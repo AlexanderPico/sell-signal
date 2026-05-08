@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>sell-signal</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body>
+    <main>
+      <h1>sell-signal</h1>
+      <p>Hosted-model resale triage using your existing Hermes connection.</p>
+      {% if error %}<div class="error" role="alert">{{ error }}</div>{% endif %}
+      <form id="analyze-form" method="post" action="/analyze" enctype="multipart/form-data">
+        <label for="text_input">Text input</label>
+        <textarea id="text_input" name="text_input" rows="4" placeholder="The Manga Guide to Relativity by Hideo Nitta paperback">{{ text_input }}</textarea>
+        <label for="files">Image upload</label>
+        <input id="files" name="files" type="file" accept="image/*" multiple>
+        <div id="submission-status" class="status" aria-live="polite"></div>
+        <p class="hint">This can take 10 to 30 seconds.</p>
+        <button id="analyze-button" type="submit">Analyze</button>
+      </form>
+      {% if result %}
+      <section>
+        <h2>Prioritized items</h2>
+        <p>Provider: {{ result["provider"] }} · Model: {{ result["model"] }}</p>
+        {% if result["items"] %}
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Category</th>
+              <th>Confidence</th>
+              <th>Used median</th>
+              <th>New median</th>
+              <th>Priority</th>
+              <th>Why</th>
+              <th>Evidence</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in result["items"] %}
+            <tr>
+              <td>{{ row["item"]["name"] }}</td>
+              <td>{{ row["item"]["category"] }}</td>
+              <td>{{ row["item"]["confidence"] }}</td>
+              <td>{{ row["pricing"]["used_median"] }}</td>
+              <td>{{ row["pricing"]["new_median"] }}</td>
+              <td>{{ row["priority_label"] }} ({{ row["priority_score"] }})</td>
+              <td>{{ '; '.join(row["why"]) }}</td>
+              <td>{{ '; '.join(row["pricing"]["evidence"]) }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <div class="empty-result">
+          <p><strong>No resale items identified.</strong></p>
+          <p>Try a clearer photo or add a short text description.</p>
+        </div>
+        {% endif %}
+      </section>
+      {% endif %}
+    </main>
+    <script>
+      const form = document.getElementById('analyze-form');
+      const status = document.getElementById('submission-status');
+      const button = document.getElementById('analyze-button');
+      const textInput = document.getElementById('text_input');
+      const filesInput = document.getElementById('files');
+
+      form?.addEventListener('submit', () => {
+        const hasText = Boolean(textInput?.value.trim());
+        const fileCount = filesInput?.files?.length ?? 0;
+        const modeMessage = fileCount > 0
+          ? `Analyzing ${fileCount} image${fileCount === 1 ? '' : 's'}... this can take 10 to 30 seconds.`
+          : hasText
+            ? 'Analyzing text input... this can take 10 to 30 seconds.'
+            : 'Submitting...';
+        if (status) {
+          status.textContent = modeMessage;
+        }
+        if (button) {
+          button.disabled = true;
+          button.textContent = 'Analyzing...';
+        }
+        form.setAttribute('aria-busy', 'true');
+      });
+    </script>
+  </body>
+</html>
