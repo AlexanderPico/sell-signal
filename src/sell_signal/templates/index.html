@@ -26,6 +26,11 @@
         <label for="files">Image upload</label>
         <input id="files" name="files" type="file" accept="image/*" multiple>
         <div id="submission-status" class="status" aria-live="polite"></div>
+        <ol id="submission-steps" class="status-steps" aria-live="polite">
+          {% for step in submission["progress_steps"] %}
+          <li data-step-index="{{ loop.index0 }}">{{ step }}</li>
+          {% endfor %}
+        </ol>
         <p class="hint">This can take 10 to 30 seconds.</p>
         <button id="analyze-button" type="submit">Analyze</button>
       </form>
@@ -33,6 +38,13 @@
       <section>
         <h2>Prioritized items</h2>
         <p>Provider: {{ result["provider"] }} · Model: {{ result["model"] }}</p>
+        {% if result_summary %}
+        <ul class="result-summary">
+          {% for line in result_summary %}
+          <li>{{ line }}</li>
+          {% endfor %}
+        </ul>
+        {% endif %}
         {% if result["items"] %}
         <table>
           <thead>
@@ -79,18 +91,52 @@
       const button = document.getElementById('analyze-button');
       const textInput = document.getElementById('text_input');
       const filesInput = document.getElementById('files');
+      const stepElements = Array.from(document.querySelectorAll('#submission-steps li'));
+
+      const setActiveStep = (index) => {
+        stepElements.forEach((element, elementIndex) => {
+          element.classList.toggle('active', elementIndex === index);
+          element.classList.toggle('done', elementIndex < index);
+        });
+      };
 
       form?.addEventListener('submit', () => {
         const hasText = Boolean(textInput?.value.trim());
         const fileCount = filesInput?.files?.length ?? 0;
-        const modeMessage = fileCount > 0
-          ? `Analyzing ${fileCount} image${fileCount === 1 ? '' : 's'}... this can take 10 to 30 seconds.`
+        const stepMessages = fileCount > 0
+          ? [
+              `Preparing ${fileCount} image upload${fileCount === 1 ? '' : 's'}`,
+              `Saving ${fileCount} upload(s) for analysis`,
+              `Identifying resale items from ${fileCount} image${fileCount === 1 ? '' : 's'}`,
+              'Researching market prices from the identified items',
+              'Ranking resale priority and preparing the results table',
+            ]
           : hasText
-            ? 'Analyzing text input... this can take 10 to 30 seconds.'
-            : 'Submitting...';
-        if (status) {
-          status.textContent = modeMessage;
-        }
+            ? [
+                'Preparing text analysis request',
+                'Reading your text prompt',
+                'Identifying resale items from text',
+                'Researching market prices from the identified items',
+                'Ranking resale priority and preparing the results table',
+              ]
+            : ['Submitting request'];
+
+        stepMessages.forEach((message, index) => {
+          if (stepElements[index]) {
+            stepElements[index].textContent = message;
+          }
+        });
+
+        const timers = [0, 800, 3500, 8000, 14000];
+        timers.forEach((delay, index) => {
+          window.setTimeout(() => {
+            if (status) {
+              status.textContent = stepMessages[index] ?? stepMessages[stepMessages.length - 1];
+            }
+            setActiveStep(index);
+          }, delay);
+        });
+
         if (button) {
           button.disabled = true;
           button.textContent = 'Analyzing...';

@@ -79,10 +79,15 @@ def test_index_includes_progress_status_hook() -> None:
     assert response.status_code == 200
     assert 'id="analyze-form"' in response.text
     assert 'id="submission-status"' in response.text
+    assert 'id="submission-steps"' in response.text
+    assert 'Preparing request' in response.text
+    assert 'Identifying resale items' in response.text
+    assert 'Researching market prices' in response.text
+    assert 'Ranking resale priority' in response.text
     assert 'This can take 10 to 30 seconds.' in response.text
 
 
-def test_text_analysis_renders_table(monkeypatch) -> None:
+def test_text_analysis_renders_table_and_summary(monkeypatch) -> None:
     import sell_signal.web as web
 
     monkeypatch.setattr(web, 'SmartProvider', FakeProvider)
@@ -94,6 +99,12 @@ def test_text_analysis_renders_table(monkeypatch) -> None:
     assert 'Prioritized items' in response.text
     assert 'The Manga Guide to Relativity by Hideo Nitta paperback' in response.text
     assert 'sell (61.0)' in response.text
+    assert 'Text prompt submitted' in response.text
+    assert '1 item prioritized' in response.text
+    assert (
+        'Top recommendation: sell — The Manga Guide to Relativity by Hideo Nitta paperback'
+        in response.text
+    )
 
 
 def test_upload_analysis_renders_table(monkeypatch) -> None:
@@ -109,7 +120,7 @@ def test_upload_analysis_renders_table(monkeypatch) -> None:
     assert 'inspect (49.8)' in response.text
 
 
-def test_multi_image_analysis_shows_sources_and_warnings(monkeypatch) -> None:
+def test_multi_image_analysis_shows_sources_warnings_and_summary(monkeypatch) -> None:
     import sell_signal.web as web
 
     monkeypatch.setattr(web, 'SmartProvider', FakeMultiImageProvider)
@@ -127,6 +138,9 @@ def test_multi_image_analysis_shows_sources_and_warnings(monkeypatch) -> None:
     assert 'front.jpg, spine.jpg' in response.text
     assert 'Some images could not be analyzed.' in response.text
     assert 'blurred.jpg: vision backend timeout' in response.text
+    assert '3 upload(s) processed' in response.text
+    assert '1 item prioritized' in response.text
+    assert 'Top recommendation: sell — Merged Book' in response.text
 
 
 class ExplodingProvider:
