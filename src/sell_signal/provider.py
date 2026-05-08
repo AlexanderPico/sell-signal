@@ -73,23 +73,39 @@ class SmartProvider:
 
     def analyze_images(self, image_paths: list[Path]) -> AnalysisResult:
         prioritized: list[PrioritizedItem] = []
+        warnings: list[str] = []
         for image_path in image_paths:
-            raw_items = self._run_json_query(
-                IDENTIFY_IMAGE_PROMPT,
-                image_path=image_path,
-            )
+            try:
+                raw_items = self._run_json_query(
+                    IDENTIFY_IMAGE_PROMPT,
+                    image_path=image_path,
+                )
+            except Exception as exc:
+                warnings.append(f"{image_path.name}: {exc}")
+                continue
             for entry in self._normalize_items(raw_items):
-                prioritized.append(self._build_prioritized_item(entry))
+                prioritized.append(
+                    self._build_prioritized_item(entry, source_image=image_path.name)
+                )
         return AnalysisResult(
-            items=prioritized,
+            items=self._merge_duplicate_items(prioritized),
             provider=self.settings.provider_mode,
             model=self.settings.model,
+            warnings=warnings,
         )
 
-    def _build_prioritized_item(self, payload: dict[str, Any]) -> PrioritizedItem:
+    def _build_prioritized_item(
+        self,
+        payload: dict[str, Any],
+        *,
+        source_image: str | None = None,
+    ) -> PrioritizedItem:
         item = IdentifiedItem.model_validate(self._normalize_identified_item(payload))
         pricing = self._research_price(item)
-        return assign_priority(PrioritizedItem(item=item, pricing=pricing))
+        prioritized = assign_priority(PrioritizedItem(item=item, pricing=pricing))
+        if source_image:
+            prioritized.source_images = [source_image]
+        return prioritized
 
     def _research_price(self, item: IdentifiedItem) -> PriceBand:
         payload = self._run_json_query(
@@ -129,6 +145,40 @@ class SmartProvider:
             for key, value in identifiers.items()
         }
         return normalized
+
+    def _merge_duplicate_items(
+        self,
+        items: list[PrioritizedItem],
+    ) -> list[PrioritizedItem]:
+        merged: dict[tuple[str, str], PrioritizedItem] = {}
+        for item in items:
+            key = self._item_dedupe_key(item)
+            existing = merged.get(key)
+            if existing is None:
+                merged[key] = item
+                continue
+            existing.source_images = sorted(
+                set(existing.source_images).union(item.source_images)
+            )
+            existing.item.confidence = max(existing.item.confidence, item.item.confidence)
+            if len(item.why) > len(existing.why):
+                existing.why = item.why
+            if item.priority_score > existing.priority_score:
+                existing.priority_score = item.priority_score
+                existing.priority_label = item.priority_label
+            has_better_evidence = len(item.pricing.evidence) > len(
+                existing.pricing.evidence
+            )
+            if item.pricing.evidence and has_better_evidence:
+                existing.pricing = item.pricing
+        return sorted(merged.values(), key=lambda row: row.priority_score, reverse=True)
+
+    @staticmethod
+    def _item_dedupe_key(item: PrioritizedItem) -> tuple[str, str]:
+        return (
+            item.item.category.strip().lower(),
+            " ".join(item.item.name.strip().lower().split()),
+        )
 
     def _run_json_query(
         self,

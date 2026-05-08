@@ -10,6 +10,16 @@
       <h1>sell-signal</h1>
       <p>Hosted-model resale triage using your existing Hermes connection.</p>
       {% if error %}<div class="error" role="alert">{{ error }}</div>{% endif %}
+      {% if result and result["warnings"] %}
+      <div class="warning" role="alert">
+        <p><strong>Some images could not be analyzed.</strong></p>
+        <ul>
+          {% for warning in result["warnings"] %}
+          <li>{{ warning }}</li>
+          {% endfor %}
+        </ul>
+      </div>
+      {% endif %}
       <form id="analyze-form" method="post" action="/analyze" enctype="multipart/form-data">
         <label for="text_input">Text input</label>
         <textarea id="text_input" name="text_input" rows="4" placeholder="The Manga Guide to Relativity by Hideo Nitta paperback">{{ text_input }}</textarea>
@@ -30,6 +40,7 @@
               <th>Name</th>
               <th>Category</th>
               <th>Confidence</th>
+              <th>Seen in</th>
               <th>Used median</th>
               <th>New median</th>
               <th>Priority</th>
@@ -43,6 +54,7 @@
               <td>{{ row["item"]["name"] }}</td>
               <td>{{ row["item"]["category"] }}</td>
               <td>{{ row["item"]["confidence"] }}</td>
+              <td>{{ ', '.join(row["source_images"]) if row["source_images"] else 'text input' }}</td>
               <td>{{ row["pricing"]["used_median"] }}</td>
               <td>{{ row["pricing"]["new_median"] }}</td>
               <td>{{ row["priority_label"] }} ({{ row["priority_score"] }})</td>

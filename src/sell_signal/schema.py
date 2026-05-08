@@ -29,9 +29,11 @@ class PrioritizedItem(BaseModel):
     priority_score: float = 0.0
     priority_label: str = "inspect"
     why: list[str] = Field(default_factory=list)
+    source_images: list[str] = Field(default_factory=list)
 
 
 class AnalysisResult(BaseModel):
     items: list[PrioritizedItem] = Field(default_factory=list)
     provider: str
     model: str
+    warnings: list[str] = Field(default_factory=list)

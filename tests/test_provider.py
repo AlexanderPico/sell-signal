@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -67,3 +68,41 @@ def test_run_json_query_surfaces_hermes_stderr(monkeypatch) -> None:
 
     with pytest.raises(RuntimeError, match='temporary provider outage'):
         provider._run_json_query('ping')
+
+
+def test_analyze_images_dedupes_and_keeps_partial_failures(monkeypatch) -> None:
+    provider = SmartProvider(Settings())
+
+    def fake_run(prompt: str, *, image_path=None, toolsets=None):
+        if toolsets == 'web':
+            return {
+                'used_low': 10,
+                'used_high': 30,
+                'used_median': 20,
+                'new_low': 25,
+                'new_high': 40,
+                'new_median': 32,
+                'currency': 'USD',
+                'evidence': ['source a'],
+            }
+        assert image_path is not None
+        if image_path.name == 'broken.jpg':
+            raise RuntimeError('vision backend timeout')
+        if image_path.name == 'front.jpg':
+            return [{'name': 'Example Book', 'category': 'Book', 'confidence': 0.95}]
+        if image_path.name == 'spine.jpg':
+            return [{'name': 'example book', 'category': 'book', 'confidence': 0.91}]
+        raise AssertionError(f'unexpected image path: {image_path}')
+
+    monkeypatch.setattr(provider, '_run_json_query', fake_run)
+
+    result = provider.analyze_images([
+        Path('front.jpg'),
+        Path('broken.jpg'),
+        Path('spine.jpg'),
+    ])
+
+    assert len(result.items) == 1
+    assert result.items[0].item.name == 'Example Book'
+    assert result.items[0].source_images == ['front.jpg', 'spine.jpg']
+    assert result.warnings == ['broken.jpg: vision backend timeout']

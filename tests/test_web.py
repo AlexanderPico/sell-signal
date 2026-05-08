@@ -43,6 +43,31 @@ class FakeProvider:
         )
 
 
+class FakeMultiImageProvider:
+    def __init__(self, settings) -> None:
+        self.settings = settings
+
+    def analyze_text(self, text: str) -> AnalysisResult:
+        raise AssertionError('not used in this test')
+
+    def analyze_images(self, image_paths) -> AnalysisResult:
+        return AnalysisResult(
+            items=[
+                PrioritizedItem(
+                    item=IdentifiedItem(name='Merged Book', category='book', confidence=0.98),
+                    pricing=PriceBand(used_median=35.0, new_median=50.0, evidence=['source c']),
+                    priority_score=58.0,
+                    priority_label='sell',
+                    why=['seen clearly in multiple photos'],
+                    source_images=['front.jpg', 'spine.jpg'],
+                )
+            ],
+            provider='hermes_bridge',
+            model='gpt-5.4',
+            warnings=['blurred.jpg: vision backend timeout'],
+        )
+
+
 def test_healthz() -> None:
     response = client.get('/healthz')
     assert response.status_code == 200
@@ -82,6 +107,26 @@ def test_upload_analysis_renders_table(monkeypatch) -> None:
     assert response.status_code == 200
     assert 'Uploaded Book' in response.text
     assert 'inspect (49.8)' in response.text
+
+
+def test_multi_image_analysis_shows_sources_and_warnings(monkeypatch) -> None:
+    import sell_signal.web as web
+
+    monkeypatch.setattr(web, 'SmartProvider', FakeMultiImageProvider)
+    response = client.post(
+        '/analyze',
+        files=[
+            ('files', ('front.jpg', BytesIO(b'front'), 'image/jpeg')),
+            ('files', ('spine.jpg', BytesIO(b'spine'), 'image/jpeg')),
+            ('files', ('blurred.jpg', BytesIO(b'blurred'), 'image/jpeg')),
+        ],
+    )
+    assert response.status_code == 200
+    assert 'Merged Book' in response.text
+    assert 'Seen in' in response.text
+    assert 'front.jpg, spine.jpg' in response.text
+    assert 'Some images could not be analyzed.' in response.text
+    assert 'blurred.jpg: vision backend timeout' in response.text
 
 
 class ExplodingProvider:
