@@ -12,9 +12,12 @@ from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel
 
 from sell_signal.config import get_settings
 from sell_signal.provider import SmartProvider
+from sell_signal.schema import AnalysisResult
+from sell_signal.sheet_store import GoogleSheetStore
 
 BASE_DIR = Path(__file__).resolve().parent
 app = FastAPI(title="sell-signal")
@@ -31,6 +34,31 @@ STEP_LABELS = {
 
 _analysis_jobs: dict[str, dict[str, Any]] = {}
 _analysis_jobs_lock = Lock()
+
+
+class SaveResultsPayload(BaseModel):
+    result: AnalysisResult
+    submission: dict[str, Any]
+
+
+def _sheet_store() -> GoogleSheetStore:
+    return GoogleSheetStore(get_settings())
+
+
+def _sheet_export_enabled() -> bool:
+    return _sheet_store().is_configured()
+
+
+def _build_save_payload(
+    result: dict | None,
+    submission: dict[str, Any],
+) -> dict[str, Any] | None:
+    if not result or not result.get('items'):
+        return None
+    return {
+        'result': result,
+        'submission': submission,
+    }
 
 
 def _progress_steps(mode: str, upload_count: int = 0) -> list[dict[str, str]]:
@@ -131,6 +159,8 @@ def _render_result_section(
         result=result,
         result_summary=result_summary or _build_result_summary(result, submission),
         result_pending=result_pending,
+        save_payload=_build_save_payload(result, submission),
+        sheet_export_enabled=_sheet_export_enabled(),
     )
 
 
@@ -152,6 +182,8 @@ def _render_index(
             'text_input': text_input,
             'submission': submission,
             'result_summary': _build_result_summary(result, submission),
+            'save_payload': _build_save_payload(result, submission),
+            'sheet_export_enabled': _sheet_export_enabled(),
         },
     )
 
@@ -387,6 +419,36 @@ def analyze_status(job_id: str) -> JSONResponse:
             ),
         }
     )
+
+
+@app.post('/results/save')
+def save_results(payload: SaveResultsPayload) -> JSONResponse:
+    store = _sheet_store()
+    if not store.is_configured():
+        raise HTTPException(status_code=400, detail='Google Sheets export is not configured.')
+    if not payload.result.items:
+        raise HTTPException(status_code=400, detail='No result rows available to save.')
+    try:
+        save_result = store.save_result(payload.result, payload.submission)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if isinstance(save_result, dict):
+        response_payload = dict(save_result)
+    else:
+        response_payload = {
+            'saved_row_count': save_result.saved_row_count,
+            'total_row_count': save_result.total_row_count,
+            'sheet_id': save_result.sheet_id,
+            'worksheet_name': save_result.worksheet_name,
+        }
+    row_label = 'row' if response_payload['saved_row_count'] == 1 else 'rows'
+    response_payload['message'] = (
+        f"Saved {response_payload['saved_row_count']} {row_label} to Google Sheet "
+        'tab '
+        f"{response_payload['worksheet_name']} "
+        f"({response_payload['total_row_count']} total rows)."
+    )
+    return JSONResponse(response_payload)
 
 
 @app.post('/analyze', response_class=HTMLResponse)

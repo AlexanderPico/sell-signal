@@ -23,6 +23,19 @@
   <p><em>Working draft while pricing continues.</em></p>
   {% endif %}
   {% if result["items"] %}
+  {% if not result_pending %}
+  <div data-save-results-section>
+    <button type="button" data-save-results-button {% if not sheet_export_enabled %}disabled{% endif %}>Save to Google Sheet</button>
+    <p data-save-results-status aria-live="polite">
+      {% if not sheet_export_enabled %}
+      Set SELL_SIGNAL_GOOGLE_SHEET_ID and SELL_SIGNAL_GOOGLE_SHEETS_COMMAND to enable sheet saving.
+      {% endif %}
+    </p>
+    {% if save_payload %}
+    <script type="application/json" data-save-results-payload>{{ save_payload | tojson }}</script>
+    {% endif %}
+  </div>
+  {% endif %}
   <table>
     <thead>
       <tr>

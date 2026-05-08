@@ -128,6 +128,50 @@
         }
       };
 
+      output?.addEventListener('click', async (event) => {
+        const saveButton = event.target.closest('[data-save-results-button]');
+        if (!saveButton) {
+          return;
+        }
+        const section = saveButton.closest('[data-save-results-section]');
+        const payloadNode = section?.querySelector('[data-save-results-payload]');
+        const statusNode = section?.querySelector('[data-save-results-status]');
+        if (!payloadNode) {
+          if (statusNode) {
+            statusNode.textContent = 'No analysis result available to save.';
+          }
+          return;
+        }
+
+        saveButton.disabled = true;
+        if (statusNode) {
+          statusNode.textContent = 'Saving rows to Google Sheet...';
+        }
+
+        try {
+          const response = await fetch('/results/save', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: payloadNode.textContent,
+          });
+          const payload = await response.json();
+          if (!response.ok) {
+            throw new Error(payload.detail || 'Unable to save rows to Google Sheet');
+          }
+          if (statusNode) {
+            statusNode.textContent = payload.message || 'Saved to Google Sheet.';
+          }
+        } catch (error) {
+          if (statusNode) {
+            statusNode.textContent = error instanceof Error ? error.message : 'Unable to save rows to Google Sheet';
+          }
+        } finally {
+          saveButton.disabled = false;
+        }
+      });
+
       form?.addEventListener('submit', async (event) => {
         if (!window.fetch) {
           return;

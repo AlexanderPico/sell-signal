@@ -2,6 +2,7 @@ from io import BytesIO
 
 from fastapi.testclient import TestClient
 
+from sell_signal.config import Settings
 from sell_signal.schema import AnalysisResult, IdentifiedItem, PriceBand, PrioritizedItem
 from sell_signal.web import app
 
@@ -343,3 +344,111 @@ def test_empty_results_show_retry_guidance(monkeypatch) -> None:
     assert response.status_code == 200
     assert 'No resale items identified.' in response.text
     assert 'Try a clearer photo or add a short text description.' in response.text
+
+
+class FakeSheetStore:
+    last_saved_result = None
+    last_saved_submission = None
+
+    def __init__(self, settings) -> None:
+        self.settings = settings
+
+    def is_configured(self) -> bool:
+        return True
+
+    def save_result(self, result: AnalysisResult, submission: dict):
+        type(self).last_saved_result = result
+        type(self).last_saved_submission = submission
+        return {
+            'saved_row_count': len(result.items),
+            'total_row_count': 3,
+            'sheet_id': 'sheet-123',
+            'worksheet_name': 'SellSignal',
+        }
+
+
+class UnconfiguredSheetStore:
+    def __init__(self, settings) -> None:
+        self.settings = settings
+
+    def is_configured(self) -> bool:
+        return False
+
+    def save_result(self, result: AnalysisResult, submission: dict):
+        raise RuntimeError('Google Sheets export is not configured.')
+
+
+def test_analysis_result_renders_save_button_when_sheet_export_is_configured(monkeypatch) -> None:
+    import sell_signal.web as web
+
+    monkeypatch.setattr(web, 'SmartProvider', FakeProvider)
+    monkeypatch.setattr(
+        web,
+        'get_settings',
+        lambda: Settings(
+            google_sheet_id='sheet-123',
+            google_sheets_command='python /tmp/google_api.py',
+        ),
+    )
+    monkeypatch.setattr(web, 'GoogleSheetStore', FakeSheetStore)
+
+    response = client.post(
+        '/analyze',
+        data={'text_input': 'The Manga Guide to Relativity by Hideo Nitta paperback'},
+    )
+
+    assert response.status_code == 200
+    assert 'Save to Google Sheet' in response.text
+    assert 'data-save-results-button' in response.text
+    assert 'The Manga Guide to Relativity by Hideo Nitta paperback' in response.text
+
+
+def test_save_results_endpoint_persists_result_rows_to_google_sheet(monkeypatch) -> None:
+    import sell_signal.web as web
+
+    monkeypatch.setattr(web, 'GoogleSheetStore', FakeSheetStore)
+    monkeypatch.setattr(
+        web,
+        'get_settings',
+        lambda: Settings(
+            google_sheet_id='sheet-123',
+            google_sheets_command='python /tmp/google_api.py',
+        ),
+    )
+
+    payload = {
+        'result': FakeProvider(Settings()).analyze_text('Sapiens').model_dump(mode='json'),
+        'submission': web._build_submission_meta(text_input='Sapiens'),
+    }
+
+    response = client.post('/results/save', json=payload)
+
+    assert response.status_code == 200
+    assert response.json() == {
+        'message': 'Saved 1 row to Google Sheet tab SellSignal (3 total rows).',
+        'saved_row_count': 1,
+        'total_row_count': 3,
+        'sheet_id': 'sheet-123',
+        'worksheet_name': 'SellSignal',
+    }
+    assert FakeSheetStore.last_saved_result.items[0].item.name == 'Sapiens'
+    assert FakeSheetStore.last_saved_submission['mode'] == 'text'
+
+
+def test_save_results_endpoint_returns_configuration_error_when_sheet_export_is_disabled(
+    monkeypatch,
+) -> None:
+    import sell_signal.web as web
+
+    monkeypatch.setattr(web, 'GoogleSheetStore', UnconfiguredSheetStore)
+    monkeypatch.setattr(web, 'get_settings', lambda: Settings())
+
+    payload = {
+        'result': FakeProvider(Settings()).analyze_text('Sapiens').model_dump(mode='json'),
+        'submission': web._build_submission_meta(text_input='Sapiens'),
+    }
+
+    response = client.post('/results/save', json=payload)
+
+    assert response.status_code == 400
+    assert response.json() == {'detail': 'Google Sheets export is not configured.'}

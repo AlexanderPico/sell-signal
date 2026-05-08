@@ -14,6 +14,12 @@ class Settings:
     hermes_command: str = os.getenv("SELL_SIGNAL_HERMES_COMMAND", "hermes")
     hermes_provider: str = os.getenv("SELL_SIGNAL_HERMES_PROVIDER", "")
     hermes_timeout_seconds: int = int(os.getenv("SELL_SIGNAL_HERMES_TIMEOUT", "300"))
+    google_sheet_id: str = os.getenv("SELL_SIGNAL_GOOGLE_SHEET_ID", "")
+    google_sheet_tab: str = os.getenv("SELL_SIGNAL_GOOGLE_SHEET_TAB", "SellSignal")
+    google_sheets_command: str = os.getenv("SELL_SIGNAL_GOOGLE_SHEETS_COMMAND", "")
+    google_sheets_timeout_seconds: int = int(
+        os.getenv("SELL_SIGNAL_GOOGLE_SHEETS_TIMEOUT", "60")
+    )
 
 
 def get_settings() -> Settings:

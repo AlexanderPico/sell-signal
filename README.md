@@ -25,6 +25,38 @@ Optional later:
 - marketplace-specific research adapters
 - shared/multi-user deployment
 
+## Google Sheet save flow
+
+Set these env vars before starting the web app:
+
+```bash
+export SELL_SIGNAL_GOOGLE_SHEET_ID="your-sheet-id"
+export SELL_SIGNAL_GOOGLE_SHEET_TAB="SellSignal"
+export SELL_SIGNAL_GOOGLE_SHEETS_COMMAND="python ${HERMES_HOME:-$HOME/.hermes}/skills/productivity/google-workspace/scripts/google_api.py"
+```
+
+Behavior:
+- final result tables show a Save to Google Sheet button
+- clicking Save appends the current rows into the dedicated sheet tab
+- the sheet is then rewritten in sorted order so the highest-priority items stay on top
+- current sort order is priority score desc, used median desc, then saved timestamp
+
+Expected sheet columns:
+- Saved At
+- Name
+- Category
+- Confidence
+- Seen In
+- Used Median
+- New Median
+- Priority
+- Priority Score
+- Why
+- Evidence
+- Submission Mode
+- Provider
+- Model
+
 ## Local dev
 
 ```bash
