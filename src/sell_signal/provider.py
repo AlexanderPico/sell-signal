@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from pathlib import Path
 from typing import Any, Callable
@@ -381,7 +382,7 @@ class SmartProvider:
     def _raw_item_dedupe_key(item: dict[str, Any]) -> tuple[str, str]:
         return (
             str(item.get('category', '')).strip().lower(),
-            ' '.join(str(item.get('name', '')).strip().lower().split()),
+            SmartProvider._normalize_dedupe_name(str(item.get('name', ''))),
         )
 
     def _normalize_identified_item(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -413,7 +414,14 @@ class SmartProvider:
             existing.source_images = sorted(
                 set(existing.source_images).union(item.source_images)
             )
+            should_prefer_item = item.item.confidence > existing.item.confidence
             existing.item.confidence = max(existing.item.confidence, item.item.confidence)
+            if should_prefer_item:
+                existing.item.name = item.item.name
+                existing.item.category = item.item.category
+                existing.item.condition_guess = item.item.condition_guess
+                existing.item.identifiers = dict(item.item.identifiers)
+                existing.item.notes = item.item.notes
             if len(item.why) > len(existing.why):
                 existing.why = item.why
             if item.priority_score > existing.priority_score:
@@ -430,8 +438,14 @@ class SmartProvider:
     def _item_dedupe_key(item: PrioritizedItem) -> tuple[str, str]:
         return (
             item.item.category.strip().lower(),
-            " ".join(item.item.name.strip().lower().split()),
+            SmartProvider._normalize_dedupe_name(item.item.name),
         )
+
+    @staticmethod
+    def _normalize_dedupe_name(name: str) -> str:
+        lowered = name.strip().lower()
+        normalized = re.sub(r'[^0-9a-z]+', ' ', lowered)
+        return ' '.join(normalized.split())
 
     @staticmethod
     def _emit_progress(

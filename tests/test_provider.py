@@ -7,6 +7,7 @@ import pytest
 
 from sell_signal.config import Settings
 from sell_signal.provider import SmartProvider
+from sell_signal.schema import IdentifiedItem, PriceBand, PrioritizedItem
 
 
 def test_parse_json_payload_skips_session_prefix() -> None:
@@ -337,3 +338,68 @@ def test_analyze_images_dedupes_media_shelf_candidates_before_price_research(mon
     assert {item.item.name for item in result.items} == {'Sapiens', 'Educated'}
     assert priced_names.count('Sapiens') == 1
     assert priced_names.count('Educated') == 1
+
+
+def test_analyze_images_dedupes_punctuation_variants_before_price_research(monkeypatch) -> None:
+    provider = SmartProvider(Settings())
+    priced_names: list[str] = []
+
+    def fake_run(prompt: str, *, image_path=None, toolsets=None):
+        if toolsets == 'web':
+            item_name = 'ACTA PVBLICA' if 'ACTA' in prompt else 'Memoirs'
+            priced_names.append(item_name)
+            return {
+                'used_low': 15,
+                'used_high': 45,
+                'used_median': 25,
+                'new_low': 25,
+                'new_high': 60,
+                'new_median': 40,
+                'currency': 'USD',
+                'evidence': ['source a'],
+            }
+        assert image_path is not None
+        if 'Focus only on shelves of books, dvds, blu-rays, or similar spine-out media.' in prompt:
+            return [
+                {'name': 'ACTA. PVBLICA', 'category': 'book', 'confidence': 0.93},
+                {'name': 'ACTA PVBLICA', 'category': 'book', 'confidence': 0.97},
+                {'name': 'Memoirs', 'category': 'book', 'confidence': 0.91},
+            ]
+        return []
+
+    monkeypatch.setattr(provider, '_run_json_query', fake_run)
+
+    result = provider.analyze_images([Path('punctuation-media-shelf.jpg')])
+
+    assert {item.item.name for item in result.items} == {'ACTA PVBLICA', 'Memoirs'}
+    assert priced_names.count('ACTA PVBLICA') == 1
+    assert priced_names.count('Memoirs') == 1
+
+
+def test_merge_duplicate_items_combines_source_images_for_punctuation_variants() -> None:
+    provider = SmartProvider(Settings())
+    acta_with_period = PrioritizedItem(
+        item=IdentifiedItem(name='ACTA. PVBLICA', category='book', confidence=0.91),
+        pricing=PriceBand(used_median=18.0, new_median=25.0, evidence=['source a']),
+        priority_score=55.0,
+        priority_label='inspect',
+        why=['spine partly obscured'],
+        source_images=['left.jpg'],
+    )
+    acta_without_period = PrioritizedItem(
+        item=IdentifiedItem(name='ACTA PVBLICA', category='book', confidence=0.97),
+        pricing=PriceBand(used_median=20.0, new_median=28.0, evidence=['source a', 'source b']),
+        priority_score=62.0,
+        priority_label='sell',
+        why=['clearer title read'],
+        source_images=['right.jpg'],
+    )
+
+    merged = provider._merge_duplicate_items([acta_with_period, acta_without_period])
+
+    assert len(merged) == 1
+    assert merged[0].item.name == 'ACTA PVBLICA'
+    assert merged[0].source_images == ['left.jpg', 'right.jpg']
+    assert merged[0].item.confidence == 0.97
+    assert merged[0].priority_label == 'sell'
+    assert merged[0].pricing.evidence == ['source a', 'source b']
