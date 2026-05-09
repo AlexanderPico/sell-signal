@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import subprocess
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from sell_signal.config import Settings
@@ -151,6 +153,7 @@ class GoogleSheetStore:
                 text=True,
                 check=True,
                 timeout=self.settings.google_sheets_timeout_seconds,
+                env=self._command_env(command),
             )
         except subprocess.TimeoutExpired as exc:
             raise RuntimeError('Google Sheets request timed out.') from exc
@@ -160,6 +163,60 @@ class GoogleSheetStore:
         if not expect_json:
             return None
         return self._parse_json_output(result.stdout)
+
+    def _command_env(self, command: list[str]) -> dict[str, str]:
+        env = os.environ.copy()
+        env_file = self._env_file_path(command)
+        if env_file is not None:
+            env.update(self._load_env_file(env_file))
+        profile_root = self._infer_profile_root(command)
+        if profile_root is not None:
+            env['HERMES_HOME'] = str(profile_root)
+        return env
+
+    def _env_file_path(self, command: list[str]) -> Path | None:
+        profile_root = self._infer_profile_root(command)
+        if profile_root is None:
+            return None
+        env_file = profile_root / '.env'
+        if env_file.exists():
+            return env_file
+        return None
+
+    @staticmethod
+    def _infer_profile_root(command: list[str]) -> Path | None:
+        for part in command:
+            candidate = Path(part)
+            if not candidate.is_absolute():
+                continue
+            parts = candidate.parts
+            if 'profiles' in parts:
+                profile_index = parts.index('profiles')
+                if profile_index + 1 < len(parts):
+                    return Path(*parts[: profile_index + 2])
+            if 'skills' in parts:
+                skills_index = parts.index('skills')
+                if skills_index >= 1:
+                    return Path(*parts[:skills_index])
+        return None
+
+    @staticmethod
+    def _load_env_file(path: Path) -> dict[str, str]:
+        loaded: dict[str, str] = {}
+        for raw_line in path.read_text().splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith('#') or '=' not in line:
+                continue
+            key, value = line.split('=', 1)
+            value = value.strip()
+            if (
+                len(value) >= 2
+                and value[0] == value[-1]
+                and value[0] in {'"', "'"}
+            ):
+                value = value[1:-1]
+            loaded[key.strip()] = value
+        return loaded
 
     def _sheet_range(self) -> str:
         return f'{self.settings.google_sheet_tab}!A:{self._column_name(len(self.headers))}'

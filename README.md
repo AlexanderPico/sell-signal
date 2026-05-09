@@ -40,6 +40,7 @@ Behavior:
 - clicking Save appends the current rows into the dedicated sheet tab
 - the sheet is then rewritten in sorted order so the highest-priority items stay on top
 - current sort order is priority score desc, used median desc, then saved timestamp
+- if the Google Sheets command points at a profile skill script, sell-signal also loads that profile's `.env` and sets `HERMES_HOME` to the profile root before invoking it
 
 Expected sheet columns:
 - Saved At

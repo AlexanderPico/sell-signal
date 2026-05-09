@@ -3,6 +3,48 @@ from sell_signal.schema import AnalysisResult, IdentifiedItem, PriceBand, Priori
 from sell_signal.sheet_store import GoogleSheetStore
 
 
+def test_profile_env_is_loaded_and_sets_hermes_home_for_google_command(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    profile_root = tmp_path / 'profile'
+    profile_root.mkdir()
+    env_file = profile_root / '.env'
+    env_file.write_text('GOOGLE_CLIENT_ID=abc123\n')
+    script_path = (
+        profile_root
+        / 'skills'
+        / 'productivity'
+        / 'google-workspace'
+        / 'scripts'
+        / 'google_api.py'
+    )
+    script_path.parent.mkdir(parents=True)
+    script_path.write_text('# stub\n')
+    calls: list[dict] = []
+
+    def fake_run(command, **kwargs):
+        calls.append({'command': command, 'env': kwargs.get('env')})
+
+        class Result:
+            stdout = '[]'
+
+        return Result()
+
+    monkeypatch.setattr('sell_signal.sheet_store.subprocess.run', fake_run)
+
+    store = GoogleSheetStore(
+        Settings(
+            google_sheet_id='sheet-123',
+            google_sheets_command=f'python {script_path}',
+        )
+    )
+
+    assert store._load_rows() == []
+    assert calls[0]['env']['HERMES_HOME'] == str(profile_root)
+    assert calls[0]['env']['GOOGLE_CLIENT_ID'] == 'abc123'
+
+
 class RecordingSheetStore(GoogleSheetStore):
     def __init__(self) -> None:
         super().__init__(
