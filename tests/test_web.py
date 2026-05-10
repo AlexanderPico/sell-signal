@@ -141,16 +141,17 @@ def test_healthz() -> None:
     assert response.json() == {'status': 'ok'}
 
 
-def test_index_includes_progress_status_hook() -> None:
+def test_index_uses_auto_submit_and_simplified_progress_ui() -> None:
     response = client.get('/')
     assert response.status_code == 200
     assert 'id="analyze-form"' in response.text
     assert 'id="submission-status"' in response.text
-    assert 'id="submission-steps"' in response.text
-    assert 'Preparing request' in response.text
-    assert 'Identifying resale items' in response.text
-    assert 'Researching market prices' in response.text
-    assert 'Ranking resale priority' in response.text
+    assert 'id="submission-progress"' in response.text
+    assert 'id="submission-steps"' not in response.text
+    assert 'Analyze</button>' not in response.text
+    assert "textarea?.addEventListener('keydown'" in response.text
+    assert "filesInput?.addEventListener('change'" in response.text
+    assert "form.requestSubmit()" in response.text
     assert 'This can take 10 to 30 seconds.' in response.text
 
 

@@ -16,14 +16,10 @@
         <label for="files">Image upload</label>
         <input id="files" name="files" type="file" accept="image/*" multiple>
         <div id="submission-status" class="status" aria-live="polite"></div>
-        <ol id="submission-steps" class="status-steps" aria-live="polite">
-          {% for step in submission["progress_steps"] %}
-          <li data-step-id="{{ step['id'] }}">{{ step['label'] }}</li>
-          {% endfor %}
-        </ol>
-        <ul id="submission-findings" class="status-findings"></ul>
-        <p class="hint">This can take 10 to 30 seconds.</p>
-        <button id="analyze-button" type="submit">Analyze</button>
+        <div class="progress-shell" aria-hidden="true">
+          <div id="submission-progress" class="progress-bar"></div>
+        </div>
+        <p class="hint">Press Enter to run text input, or pick image files to start automatically. This can take 10 to 30 seconds.</p>
       </form>
       <div id="analysis-output">
         {% include "_result_section.html" %}
@@ -32,18 +28,38 @@
     <script>
       const form = document.getElementById('analyze-form');
       const status = document.getElementById('submission-status');
-      const button = document.getElementById('analyze-button');
+      const progressBar = document.getElementById('submission-progress');
+      const textarea = document.getElementById('text_input');
+      const filesInput = document.getElementById('files');
       const errorBox = document.getElementById('analysis-error');
       const output = document.getElementById('analysis-output');
-      const findings = document.getElementById('submission-findings');
-      const stepElements = Array.from(document.querySelectorAll('#submission-steps li'));
+
+      const progressPercent = (payload) => {
+        if (payload.status === 'completed') {
+          return 100;
+        }
+        if (payload.status === 'failed') {
+          return 100;
+        }
+        const step = payload.current_step;
+        if (step === 'rank') {
+          return 92;
+        }
+        if (step === 'price_research') {
+          return 68;
+        }
+        if (step === 'identify') {
+          return 38;
+        }
+        if (step === 'upload') {
+          return 12;
+        }
+        return 4;
+      };
 
       const resetProgressUi = () => {
-        stepElements.forEach((element) => {
-          element.classList.remove('active', 'done');
-        });
-        if (findings) {
-          findings.innerHTML = '';
+        if (progressBar) {
+          progressBar.style.width = '0%';
         }
       };
 
@@ -61,11 +77,15 @@
       };
 
       const setButtonState = (busy) => {
-        if (!button || !form) {
+        if (!form) {
           return;
         }
-        button.disabled = busy;
-        button.textContent = busy ? 'Analyzing...' : 'Analyze';
+        if (textarea) {
+          textarea.disabled = busy;
+        }
+        if (filesInput) {
+          filesInput.disabled = busy;
+        }
         if (busy) {
           form.setAttribute('aria-busy', 'true');
         } else {
@@ -77,27 +97,8 @@
         if (status) {
           status.textContent = payload.current_message || 'Queued analysis request';
         }
-
-        const seenSteps = new Set((payload.events || []).map((event) => event.step));
-        const currentStep = payload.current_step;
-        let currentIndex = stepElements.findIndex(
-          (element) => element.dataset.stepId === currentStep,
-        );
-        if (currentIndex === -1) {
-          currentIndex = stepElements.length;
-        }
-
-        stepElements.forEach((element, index) => {
-          const stepId = element.dataset.stepId;
-          const isDone = seenSteps.has(stepId) && stepId !== currentStep;
-          element.classList.toggle('done', isDone || index < currentIndex);
-          element.classList.toggle('active', stepId === currentStep);
-        });
-
-        if (findings) {
-          findings.innerHTML = (payload.events || [])
-            .map((event) => `<li>${event.message}</li>`)
-            .join('');
+        if (progressBar) {
+          progressBar.style.width = `${progressPercent(payload)}%`;
         }
       };
 
@@ -127,6 +128,31 @@
           await new Promise((resolve) => window.setTimeout(resolve, 700));
         }
       };
+
+      const submitAnalysis = () => {
+        if (!form || form.getAttribute('aria-busy') === 'true') {
+          return;
+        }
+        form.requestSubmit();
+      };
+
+      textarea?.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' || event.shiftKey) {
+          return;
+        }
+        event.preventDefault();
+        if (!textarea.value.trim()) {
+          return;
+        }
+        submitAnalysis();
+      });
+
+      filesInput?.addEventListener('change', () => {
+        if (!filesInput.files?.length) {
+          return;
+        }
+        submitAnalysis();
+      });
 
       output?.addEventListener('click', async (event) => {
         const saveButton = event.target.closest('[data-save-results-button]');
@@ -185,6 +211,9 @@
         setButtonState(true);
         if (status) {
           status.textContent = 'Submitting analysis request...';
+        }
+        if (progressBar) {
+          progressBar.style.width = '8%';
         }
 
         try {
