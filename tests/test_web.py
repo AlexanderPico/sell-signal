@@ -152,6 +152,8 @@ def test_index_uses_auto_submit_and_simplified_progress_ui() -> None:
     assert "textarea?.addEventListener('keydown'" in response.text
     assert "filesInput?.addEventListener('change'" in response.text
     assert "form.requestSubmit()" in response.text
+    assert "const formData = new FormData(form);" in response.text
+    assert 'body: formData' in response.text
     assert 'This can take 10 to 30 seconds.' in response.text
 
 

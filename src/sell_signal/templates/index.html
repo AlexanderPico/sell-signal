@@ -208,6 +208,7 @@
         if (output) {
           output.innerHTML = '';
         }
+        const formData = new FormData(form);
         setButtonState(true);
         if (status) {
           status.textContent = 'Submitting analysis request...';
@@ -219,7 +220,7 @@
         try {
           const response = await fetch('/analyze/start', {
             method: 'POST',
-            body: new FormData(form),
+            body: formData,
           });
           const payload = await response.json();
           if (!response.ok) {
