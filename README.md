@@ -58,6 +58,66 @@ Expected sheet columns:
 - Provider
 - Model
 
+## Run the web interface
+
+The web app serves on `http://127.0.0.1:8011` by default.
+
+Basic startup:
+
+```bash
+cd /Users/aimee/.openclaw/git/AlexanderPico/sell-signal
+python3.12 -m venv .venv
+. .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e '.[dev]'
+.venv/bin/sell-signal-web
+```
+
+The app auto-loads a repo-local `.env` file on startup when present. Explicit exported environment variables still override `.env` values.
+
+Equivalent explicit uvicorn command:
+
+```bash
+cd /Users/aimee/.openclaw/git/AlexanderPico/sell-signal
+. .venv/bin/activate
+python -m uvicorn sell_signal.web:app --host 127.0.0.1 --port 8011
+```
+
+Run in the background and detach from the shell:
+
+```bash
+cd /Users/aimee/.openclaw/git/AlexanderPico/sell-signal
+.venv/bin/sell-signal-web > /tmp/sell-signal-web.log 2>&1 &
+disown
+```
+
+Or with the explicit uvicorn form:
+
+```bash
+cd /Users/aimee/.openclaw/git/AlexanderPico/sell-signal
+.venv/bin/python -m uvicorn sell_signal.web:app --host 127.0.0.1 --port 8011 > /tmp/sell-signal-web.log 2>&1 &
+disown
+```
+
+These forms do not depend on the current shell having the virtualenv activated.
+
+Provider-related environment variables are optional but available when needed:
+
+```bash
+export SELL_SIGNAL_PROVIDER=hermes_bridge
+export SELL_SIGNAL_MODEL=gpt-5.4
+export SELL_SIGNAL_HERMES_COMMAND=hermes
+```
+
+For an OpenAI-compatible backend instead of the default Hermes bridge mode:
+
+```bash
+export SELL_SIGNAL_PROVIDER=openai_compatible
+export SELL_SIGNAL_API_BASE_URL="https://your-api-base/v1"
+export SELL_SIGNAL_API_KEY="your-api-key"
+export SELL_SIGNAL_MODEL="your-model"
+```
+
 ## Local dev
 
 ```bash
