@@ -128,3 +128,5 @@ python -m pip install -e '.[dev]'
 pytest -q
 ruff check src tests
 ```
+
+These same checks run in the repo's generic GitHub Actions CI workflow on pushes and pull requests.
