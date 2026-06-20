@@ -5,9 +5,51 @@ from pathlib import Path
 
 import pytest
 
-from sell_signal.config import Settings
+from sell_signal.config import Settings, get_settings
 from sell_signal.provider import SmartProvider
 from sell_signal.schema import IdentifiedItem, PriceBand, PrioritizedItem
+
+
+def test_default_settings_use_gemini_on_nous(monkeypatch) -> None:
+    monkeypatch.delenv('SELL_SIGNAL_MODEL', raising=False)
+    monkeypatch.delenv('SELL_SIGNAL_HERMES_PROVIDER', raising=False)
+
+    settings = get_settings()
+
+    assert settings.model == 'google/gemini-3-flash-preview'
+    assert settings.hermes_provider == 'nous'
+
+
+def test_run_json_query_passes_explicit_nous_gemini_provider(monkeypatch) -> None:
+    provider = SmartProvider(Settings())
+    captured: dict[str, object] = {}
+
+    def fake_subprocess_run(command, **kwargs):
+        captured['command'] = command
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout='[{"name":"Example","category":"book"}]',
+            stderr='',
+        )
+
+    monkeypatch.setattr('sell_signal.provider.subprocess.run', fake_subprocess_run)
+
+    provider._run_json_query('ping')
+
+    command = captured['command']
+    assert isinstance(command, list)
+    assert command[command.index('-m') + 1] == 'google/gemini-3-flash-preview'
+    assert command[command.index('--provider') + 1] == 'nous'
+
+
+def test_run_json_query_refuses_openai_model_on_nous() -> None:
+    provider = SmartProvider(
+        Settings(model='gpt-5.4', hermes_provider='nous')
+    )
+
+    with pytest.raises(RuntimeError, match='Refusing to route OpenAI/GPT model'):
+        provider._run_json_query('ping')
 
 
 def test_parse_json_payload_skips_session_prefix() -> None:

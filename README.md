@@ -101,12 +101,20 @@ disown
 
 These forms do not depend on the current shell having the virtualenv activated.
 
-Provider-related environment variables are optional but available when needed:
+Provider-related environment variables are optional but available when needed. The default Hermes bridge route uses Gemini Flash through the Nous provider for low-cost item triage:
 
 ```bash
 export SELL_SIGNAL_PROVIDER=hermes_bridge
-export SELL_SIGNAL_MODEL=gpt-5.4
+export SELL_SIGNAL_MODEL=google/gemini-3-flash-preview
+export SELL_SIGNAL_HERMES_PROVIDER=nous
 export SELL_SIGNAL_HERMES_COMMAND=hermes
+```
+
+Do not route OpenAI/GPT models through the Nous provider. If you deliberately need an OpenAI model, use the already-paid Codex-backed provider explicitly:
+
+```bash
+export SELL_SIGNAL_MODEL=gpt-5.4
+export SELL_SIGNAL_HERMES_PROVIDER=openai-codex
 ```
 
 For an OpenAI-compatible backend instead of the default Hermes bridge mode:

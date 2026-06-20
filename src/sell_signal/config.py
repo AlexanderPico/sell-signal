@@ -9,11 +9,11 @@ from pathlib import Path
 class Settings:
     app_name: str = 'sell-signal'
     provider_mode: str = 'hermes_bridge'
-    model: str = 'gpt-5.4'
+    model: str = 'google/gemini-3-flash-preview'
     api_base_url: str = ''
     api_key: str = ''
     hermes_command: str = 'hermes'
-    hermes_provider: str = ''
+    hermes_provider: str = 'nous'
     hermes_timeout_seconds: int = 300
     google_sheet_id: str = ''
     google_sheet_tab: str = 'SellSignal'
@@ -46,11 +46,11 @@ def get_settings() -> Settings:
     return Settings(
         app_name='sell-signal',
         provider_mode=os.getenv('SELL_SIGNAL_PROVIDER', 'hermes_bridge'),
-        model=os.getenv('SELL_SIGNAL_MODEL', 'gpt-5.4'),
+        model=os.getenv('SELL_SIGNAL_MODEL', 'google/gemini-3-flash-preview'),
         api_base_url=os.getenv('SELL_SIGNAL_API_BASE_URL', ''),
         api_key=os.getenv('SELL_SIGNAL_API_KEY', ''),
         hermes_command=os.getenv('SELL_SIGNAL_HERMES_COMMAND', 'hermes'),
-        hermes_provider=os.getenv('SELL_SIGNAL_HERMES_PROVIDER', ''),
+        hermes_provider=os.getenv('SELL_SIGNAL_HERMES_PROVIDER', 'nous'),
         hermes_timeout_seconds=int(os.getenv('SELL_SIGNAL_HERMES_TIMEOUT', '300')),
         google_sheet_id=os.getenv('SELL_SIGNAL_GOOGLE_SHEET_ID', ''),
         google_sheet_tab=os.getenv('SELL_SIGNAL_GOOGLE_SHEET_TAB', 'SellSignal'),

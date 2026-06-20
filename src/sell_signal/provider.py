@@ -475,6 +475,7 @@ class SmartProvider:
         image_path: Path | None = None,
         toolsets: str | None = None,
     ) -> Any:
+        self._validate_model_provider_policy()
         command = [
             self.settings.hermes_command,
             "chat",
@@ -514,6 +515,25 @@ class SmartProvider:
                 f"Hermes command failed with exit code {exc.returncode}"
             ) from exc
         return self._parse_json_payload(result.stdout)
+
+    def _validate_model_provider_policy(self) -> None:
+        model = (self.settings.model or '').strip().lower()
+        provider = (self.settings.hermes_provider or '').strip().lower()
+        if provider == 'nous' and self._is_openai_model(model):
+            raise RuntimeError(
+                'Refusing to route OpenAI/GPT model through Nous Portal. '
+                'Use google/gemini-3-flash-preview on provider nous, or set '
+                'SELL_SIGNAL_HERMES_PROVIDER=openai-codex for Codex-backed OpenAI access.'
+            )
+
+    @staticmethod
+    def _is_openai_model(model: str) -> bool:
+        return (
+            model.startswith('gpt-')
+            or model.startswith('openai/')
+            or '/gpt-' in model
+            or 'openai/gpt-' in model
+        )
 
     @staticmethod
     def _parse_json_payload(output: str) -> Any:
