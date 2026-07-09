@@ -193,8 +193,18 @@ class SmartProvider:
                         'retrying for individual items'
                     ),
                 )
-                normalized_items = self._expand_grouped_image_items(image_path, normalized_items[0])
-            media_items = self._extract_media_shelf_items(image_path)
+                try:
+                    normalized_items = self._expand_grouped_image_items(
+                        image_path,
+                        normalized_items[0],
+                    )
+                except Exception as exc:
+                    warnings.append(f"{image_path.name}: grouped-item retry skipped: {exc}")
+            try:
+                media_items = self._extract_media_shelf_items(image_path)
+            except Exception as exc:
+                warnings.append(f"{image_path.name}: media shelf extraction skipped: {exc}")
+                media_items = []
             chosen_items = self._select_image_items(
                 generic_items=normalized_items,
                 media_items=media_items,
@@ -218,11 +228,29 @@ class SmartProvider:
                 ),
             )
             for entry in chosen_items:
-                prioritized_item = self._build_prioritized_item(
-                    entry,
-                    source_image=image_path.name,
-                    progress_callback=progress_callback,
-                )
+                try:
+                    prioritized_item = self._build_prioritized_item(
+                        entry,
+                        source_image=image_path.name,
+                        progress_callback=progress_callback,
+                    )
+                except Exception as exc:
+                    try:
+                        item = IdentifiedItem.model_validate(
+                            self._normalize_identified_item(entry)
+                        )
+                    except Exception:
+                        warnings.append(f"{image_path.name}: item skipped: {exc}")
+                        continue
+                    prioritized_item = PrioritizedItem(item=item, pricing=PriceBand())
+                    prioritized_item = assign_priority(prioritized_item)
+                    prioritized_item.priority_label = 'inspect'
+                    prioritized_item.priority_score = max(prioritized_item.priority_score, 20.0)
+                    prioritized_item.why = ['price research unavailable; needs manual review']
+                    prioritized_item.source_images = [image_path.name]
+                    warnings.append(
+                        f"{image_path.name}: price research skipped for {item.name}: {exc}"
+                    )
                 prioritized.append(prioritized_item)
                 self._emit_item(item_callback, prioritized_item)
         merged_items = self._merge_duplicate_items(prioritized)
@@ -508,8 +536,11 @@ class SmartProvider:
             command.extend(["-m", self.settings.model])
         if self.settings.hermes_provider:
             command.extend(["--provider", self.settings.hermes_provider])
-        if toolsets:
-            command.extend(["-t", toolsets])
+        effective_toolsets = toolsets
+        if effective_toolsets is None and image_path is not None:
+            effective_toolsets = "vision"
+        if effective_toolsets:
+            command.extend(["-t", effective_toolsets])
         if image_path is not None:
             command.extend(["--image", str(image_path)])
 

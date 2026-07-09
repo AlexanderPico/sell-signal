@@ -337,6 +337,82 @@ def test_analyze_images_retries_media_shelf_by_section_when_full_pass_is_empty(m
     )
 
 
+def test_analyze_images_keeps_generic_items_when_media_shelf_pass_times_out(monkeypatch) -> None:
+    provider = SmartProvider(Settings())
+
+    def fake_run(prompt: str, *, image_path=None, toolsets=None):
+        if toolsets == 'web':
+            return {
+                'used_low': 15,
+                'used_high': 45,
+                'used_median': 25,
+                'new_low': 25,
+                'new_high': 60,
+                'new_median': 40,
+                'currency': 'USD',
+                'evidence': ['source a'],
+            }
+        assert image_path is not None
+        if 'Focus only on shelves of books, dvds, blu-rays, or similar spine-out media.' in prompt:
+            raise RuntimeError('Hermes request timed out after 300 seconds')
+        return [{'name': 'standing lamp', 'category': 'lighting', 'confidence': 0.94}]
+
+    monkeypatch.setattr(provider, '_run_json_query', fake_run)
+
+    result = provider.analyze_images([Path('room.jpg')])
+
+    assert [item.item.name for item in result.items] == ['standing lamp']
+    assert result.warnings == [
+        'room.jpg: media shelf extraction skipped: Hermes request timed out after 300 seconds'
+    ]
+
+
+def test_analyze_images_keeps_item_when_price_research_times_out(monkeypatch) -> None:
+    provider = SmartProvider(Settings())
+
+    def fake_run(prompt: str, *, image_path=None, toolsets=None):
+        if toolsets == 'web':
+            raise RuntimeError('Hermes request timed out after 300 seconds')
+        assert image_path is not None
+        if 'Focus only on shelves of books, dvds, blu-rays, or similar spine-out media.' in prompt:
+            return []
+        return [{'name': 'Example Book', 'category': 'Book', 'confidence': 0.95}]
+
+    monkeypatch.setattr(provider, '_run_json_query', fake_run)
+
+    result = provider.analyze_images([Path('book.jpg')])
+
+    assert [item.item.name for item in result.items] == ['Example Book']
+    assert result.items[0].pricing.used_median is None
+    assert result.items[0].priority_label == 'inspect'
+    assert result.warnings == [
+        'book.jpg: price research skipped for Example Book: '
+        'Hermes request timed out after 300 seconds'
+    ]
+
+
+def test_image_queries_use_vision_toolset_by_default(monkeypatch) -> None:
+    provider = SmartProvider(Settings())
+    captured: dict[str, object] = {}
+
+    def fake_subprocess_run(command, **kwargs):
+        captured['command'] = command
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout='[{"name":"Example","category":"book"}]',
+            stderr='',
+        )
+
+    monkeypatch.setattr('sell_signal.provider.subprocess.run', fake_subprocess_run)
+
+    provider._run_json_query('ping', image_path=Path('image.jpg'))
+
+    command = captured['command']
+    assert isinstance(command, list)
+    assert command[command.index('-t') + 1] == 'vision'
+
+
 def test_analyze_images_skips_invalid_media_candidates_instead_of_failing(monkeypatch) -> None:
     provider = SmartProvider(Settings())
 
