@@ -36,11 +36,32 @@ def test_run_json_query_passes_explicit_nous_gemini_provider(monkeypatch) -> Non
     monkeypatch.setattr('sell_signal.provider.subprocess.run', fake_subprocess_run)
 
     provider._run_json_query('ping')
-
     command = captured['command']
     assert isinstance(command, list)
     assert command[command.index('-m') + 1] == 'google/gemini-3-flash-preview'
     assert command[command.index('--provider') + 1] == 'nous'
+
+
+def test_resolve_hermes_command_uses_path_when_available(monkeypatch) -> None:
+    provider = SmartProvider(Settings(hermes_command='hermes'))
+
+    monkeypatch.setattr('sell_signal.provider.shutil.which', lambda command: '/opt/bin/hermes')
+
+    assert provider._resolve_hermes_command() == '/opt/bin/hermes'
+
+
+def test_resolve_hermes_command_falls_back_to_user_local_bin(tmp_path, monkeypatch) -> None:
+    provider = SmartProvider(Settings(hermes_command='hermes'))
+    fake_home = tmp_path / 'home'
+    hermes_path = fake_home / '.local' / 'bin' / 'hermes'
+    hermes_path.parent.mkdir(parents=True)
+    hermes_path.write_text('#!/bin/sh\n')
+
+    monkeypatch.setattr('sell_signal.provider.shutil.which', lambda command: None)
+    monkeypatch.setattr('sell_signal.provider.Path.home', lambda: fake_home)
+
+    assert provider._resolve_hermes_command() == str(hermes_path)
+
 
 
 def test_run_json_query_refuses_openai_model_on_nous() -> None:

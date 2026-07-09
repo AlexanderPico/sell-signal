@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any, Callable
@@ -468,6 +470,22 @@ class SmartProvider:
     def _pluralize(count: int) -> str:
         return '' if count == 1 else 's'
 
+    def _resolve_hermes_command(self) -> str:
+        configured = self.settings.hermes_command.strip() or 'hermes'
+        if os.sep in configured:
+            return configured
+        resolved = shutil.which(configured)
+        if resolved:
+            return resolved
+        if configured == 'hermes':
+            for candidate in (
+                Path.home() / '.local' / 'bin' / 'hermes',
+                Path.home() / '.hermes' / 'hermes-agent' / 'venv' / 'bin' / 'hermes',
+            ):
+                if candidate.exists():
+                    return str(candidate)
+        return configured
+
     def _run_json_query(
         self,
         prompt: str,
@@ -477,7 +495,7 @@ class SmartProvider:
     ) -> Any:
         self._validate_model_provider_policy()
         command = [
-            self.settings.hermes_command,
+            self._resolve_hermes_command(),
             "chat",
             "-Q",
             "--source",
