@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from sell_signal.config import Settings, get_settings
-from sell_signal.provider import SmartProvider
+from sell_signal.provider import IDENTIFY_IMAGE_PROMPT, SmartProvider
 from sell_signal.schema import IdentifiedItem, PriceBand, PrioritizedItem
 
 
@@ -335,6 +335,76 @@ def test_analyze_images_retries_media_shelf_by_section_when_full_pass_is_empty(m
         'Focus only on this section of the image: center third.' in prompt
         for prompt in prompts
     )
+
+
+def test_analyze_images_retries_initial_identification_with_downscaled_image(monkeypatch) -> None:
+    provider = SmartProvider(Settings())
+    original = Path('large.jpg')
+    fallback = Path('large.vision.jpg')
+    seen_paths: list[Path] = []
+
+    def fake_run(prompt: str, *, image_path=None, toolsets=None):
+        if toolsets == 'web':
+            return {
+                'used_low': 15,
+                'used_high': 45,
+                'used_median': 25,
+                'new_low': 25,
+                'new_high': 60,
+                'new_median': 40,
+                'currency': 'USD',
+                'evidence': ['source a'],
+            }
+        assert image_path is not None
+        seen_paths.append(image_path)
+        if prompt == IDENTIFY_IMAGE_PROMPT and image_path == original:
+            raise RuntimeError('Hermes request timed out after 300 seconds')
+        if 'Focus only on shelves of books, dvds, blu-rays, or similar spine-out media.' in prompt:
+            return []
+        return [{'name': 'Example Book', 'category': 'book', 'confidence': 0.95}]
+
+    monkeypatch.setattr(provider, '_run_json_query', fake_run)
+    monkeypatch.setattr(provider, '_make_vision_fallback_image', lambda path: fallback)
+
+    result = provider.analyze_images([original])
+
+    assert [item.item.name for item in result.items] == ['Example Book']
+    assert seen_paths[:2] == [original, fallback]
+    assert result.warnings == [
+        'large.jpg: initial analysis timed out; retried with downscaled image'
+    ]
+
+
+def test_make_vision_fallback_image_uses_sips(tmp_path, monkeypatch) -> None:
+    provider = SmartProvider(Settings())
+    source = tmp_path / 'photo.jpg'
+    source.write_bytes(b'original')
+    captured: dict[str, object] = {}
+
+    def fake_run(command, **kwargs):
+        captured['command'] = command
+        output_path = Path(command[-1])
+        output_path.write_bytes(b'downscaled')
+        return subprocess.CompletedProcess(args=command, returncode=0, stdout='', stderr='')
+
+    monkeypatch.setattr('sell_signal.provider.shutil.which', lambda command: '/usr/bin/sips')
+    monkeypatch.setattr('sell_signal.provider.subprocess.run', fake_run)
+
+    fallback = provider._make_vision_fallback_image(source)
+
+    assert fallback == tmp_path / 'photo.vision.jpg'
+    command = captured['command']
+    assert command == [
+        '/usr/bin/sips',
+        '-Z',
+        '1600',
+        '-s',
+        'format',
+        'jpeg',
+        str(source),
+        '--out',
+        str(fallback),
+    ]
 
 
 def test_analyze_images_keeps_generic_items_when_media_shelf_pass_times_out(monkeypatch) -> None:

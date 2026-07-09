@@ -181,8 +181,35 @@ class SmartProvider:
                     image_path=image_path,
                 )
             except Exception as exc:
-                warnings.append(f"{image_path.name}: {exc}")
-                continue
+                if self._is_timeout_error(exc):
+                    fallback_image = self._make_vision_fallback_image(image_path)
+                    if fallback_image != image_path:
+                        self._emit_progress(
+                            progress_callback,
+                            'identify',
+                            (
+                                f'Image {image_index} of {image_count}: '
+                                'initial analysis timed out; retrying downscaled image'
+                            ),
+                        )
+                        try:
+                            raw_items = self._run_json_query(
+                                IDENTIFY_IMAGE_PROMPT,
+                                image_path=fallback_image,
+                            )
+                            warnings.append(
+                                f"{image_path.name}: initial analysis timed out; "
+                                'retried with downscaled image'
+                            )
+                        except Exception as retry_exc:
+                            warnings.append(f"{image_path.name}: {retry_exc}")
+                            continue
+                    else:
+                        warnings.append(f"{image_path.name}: {exc}")
+                        continue
+                else:
+                    warnings.append(f"{image_path.name}: {exc}")
+                    continue
             normalized_items = self._normalize_items(raw_items)
             if self._should_retry_as_itemized(normalized_items):
                 self._emit_progress(
@@ -497,6 +524,39 @@ class SmartProvider:
     @staticmethod
     def _pluralize(count: int) -> str:
         return '' if count == 1 else 's'
+
+    @staticmethod
+    def _is_timeout_error(exc: Exception) -> bool:
+        return 'timed out' in str(exc).lower()
+
+    def _make_vision_fallback_image(self, image_path: Path) -> Path:
+        sips_path = shutil.which('sips')
+        if not sips_path:
+            return image_path
+        fallback_path = image_path.with_name(f'{image_path.stem}.vision.jpg')
+        try:
+            subprocess.run(
+                [
+                    sips_path,
+                    '-Z',
+                    '1600',
+                    '-s',
+                    'format',
+                    'jpeg',
+                    str(image_path),
+                    '--out',
+                    str(fallback_path),
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=30,
+            )
+        except Exception:
+            return image_path
+        if fallback_path.exists() and fallback_path.stat().st_size > 0:
+            return fallback_path
+        return image_path
 
     def _resolve_hermes_command(self) -> str:
         configured = self.settings.hermes_command.strip() or 'hermes'
